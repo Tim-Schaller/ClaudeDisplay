@@ -15,8 +15,7 @@ Remote Control list     ─┘    PowerShell 7)
   local sessions every 2 s and the Remote Control sessions of other machines every 30 s.
   It computes a forecast and sends everything to the display.
 - **Display:** three pages, tap to switch (Home → Local → Remote), back to Home after
-  60 s without a tap. Brightness follows the light sensor; the backlight turns off while
-  Windows is locked.
+  60 s without a tap. Full brightness; the backlight turns off while Windows is locked.
 
 > **Made for the Claude Desktop app on Windows (Code tab).** This project is not meant
 > for setups that only use the Claude Code CLI in a terminal; for those, Claude Code's
@@ -264,9 +263,11 @@ internally. It briefly starts the Claude CLI in headless mode
   "+1" etc. counts further active sessions. Local and remote sessions both count. If all
   running sessions are idle it says "alle Sessions idle"; without running sessions it is empty.
 - **Dots:** local sessions on the left, connected remote sessions after the separator.
-  Pulsing green = working, fast-blinking orange = waiting for you (permission or
-  question; for remote sessions also a finished turn that claude.ai files under "needs
-  input"), gray = idle.
+  Pulsing green = working, fast-blinking orange = waiting for you, gray = idle. "Waiting"
+  means an open permission prompt or question; for local Claude Desktop sessions also a
+  finished turn that the app marks yellow ("needs input", e.g. Claude asks for a go-ahead).
+  For remote sessions only open prompts count. If you clear the yellow dot in the app with
+  "Mark as completed", the display does not notice (that state is not stored in a file).
 
 **Pages 1 (Local, "Lokal") and 2 (Remote):** the last 7 sessions with a status dot (colors
 as above, hollow ring = offline/ended), title and age of the last activity ("5 min",
@@ -278,9 +279,8 @@ e.g. "1 arbeitet, 4 idle" (1 working, 4 idle).
 - **"Offline":** no message from the host for 90 s. The last known values are shown at
   the bottom.
 - **`--`:** value unknown, e.g. before the first successful fetch.
-- **Brightness:** the light sensor only distinguishes bright from dark (it saturates in
-  daylight). After 10 s of darkness the display dims to about 10 %; after 10 s of light
-  it returns to 100 %. While Windows is locked the backlight is off.
+- **Brightness:** always 100 %; while Windows is locked the backlight is off. (The light
+  sensor is not used: inside a case it reads "dark" even in a normally lit room.)
 
 ## Troubleshooting
 
@@ -301,7 +301,6 @@ e.g. "1 arbeitet, 4 idle" (1 working, 4 idle).
 | Remote page: "Liste nicht abrufbar" (list not available) | No network, or the internal interface has changed. The last list stays on screen |
 | Remote page stays empty | Remote Control is not enabled on the other machine, or it uses a different Claude account |
 | Display stays dark although unlocked | "Locked" means `LogonUI.exe` is running. After unlocking, the next update arrives within 2 s |
-| Display does not dim / dims in daylight | The thresholds are in `firmware/src/app/main.cpp` (`LDR_DARK`, `LDR_BRIGHT`). Changes appear in the log as "Display-Helligkeit … (LDR …)". A case must not cover the sensor |
 
 The log is kept short: start, connect, disconnect, changed values, errors. Repeated
 identical errors are logged only once. At 1 MB it is rotated to `collector.log.1`.
@@ -349,9 +348,10 @@ Max. 7 entries, newest first. `n` = title (max. 40 characters), `s` = `w` workin
 | Message | When |
 |---|---|
 | `{"t":"hello","fw":"2.4.0"}` | After start-up. The host immediately sends `state` and both `list` |
-| `{"t":"ack","s":17.0,"w":24.0,"b":255,"l":0}` | After every `state`: the accepted values, target brightness `b` (0–255), raw light sensor value `l` |
+| `{"t":"ack","s":17.0,"w":24.0,"b":255}` | After every `state`: the accepted values and the target brightness `b` (255, or 0 while locked) |
 
-**Timing:** usage every 120 s, local sessions every 2 s, remote list every 30 s, lock
+**Timing:** usage every 120 s (in the background), local sessions every 2 s (Claude Desktop
+session files every 4 s), remote list every 30 s, lock
 state every 2 s, heartbeat every 30 s, offline screen after 90 s without `state`.
 The board computes the countdowns itself from `r` and the clock set by the host.
 
@@ -388,7 +388,7 @@ This project does not modify `~\.claude\settings.json`.
 - Panel of the dual-USB revision: ST7789 family (controller ID `81 81 B3`, read back via
   SPI), no inversion, BGR, rotation 1 = landscape 320×240.
 - SPI: SCLK 14, MOSI 13, MISO 12, CS 15, DC 2, no reset pin. Backlight GPIO 21 (PWM).
-  Touch (XPT2046): CLK 25, MOSI 32, MISO 39, CS 33, IRQ 36. Light sensor GPIO 34.
+  Touch (XPT2046): CLK 25, MOSI 32, MISO 39, CS 33, IRQ 36.
 - Without a reset pin the panel keeps its registers until power is removed. The firmware
   therefore resets it by software at start-up and then writes `B6h` (gate scan
   direction). This way the image is the same after every restart, whatever firmware ran

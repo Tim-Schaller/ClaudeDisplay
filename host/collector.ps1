@@ -3,12 +3,12 @@
   Collector für das Claude-Usage-Display (Dauerprozess, wird per Taskplaner gestartet).
 
   - Holt alle 2 Minuten den 5h-/7d-Verbrauch über die Claude-CLI (Control-Request
-    "get_usage" im Headless-Modus, derselbe Weg wie die Desktop-App). Das verbraucht
-    kein Kontingent; Anmeldung und Token-Refresh erledigt die CLI selbst.
+    "get_usage" im Headless-Modus, derselbe Weg wie die Desktop-App), asynchron. Das
+    verbraucht kein Kontingent; Anmeldung und Token-Refresh erledigt die CLI selbst.
   - Schreibt den Stand atomar nach %USERPROFILE%\.usage-display\latest.json und rechnet
     die Prognose (f, e) ab Fensterbeginn hoch.
   - Sammelt die Sessions: lokal aus der CLI-Registry (alle 2 s) und der Desktop-App
-    (alle 10 s), Remote-Sessions anderer Rechner (Remote Control) über die API (alle 30 s,
+    (alle 4 s, inkl. ihrer "needs input"-Einstufung), Remote-Sessions anderer Rechner (Remote Control) über die API (alle 30 s,
     asynchron). Optionale eigene Seitentitel in config.json (remoteLabel, localLabel).
   - Bildschirmsperre (LogonUI.exe läuft) schaltet das Display dunkel.
   - Findet das Display per USB-VID/PID (CH340, CH9102 oder CP2102) oder nimmt den festen Port
@@ -29,7 +29,7 @@ $ConfigFile = Join-Path $DataDir 'config.json'
 $PollSeconds = 120
 $HeartbeatSeconds = 30
 $LocalSeconds = 2      # CLI-Registry und Bildschirmsperre
-$DesktopSeconds = 10   # Session-Dateien der Desktop-App
+$DesktopSeconds = 4    # Session-Dateien der Desktop-App (inkl. "needs input")
 $RemoteSeconds = 30    # Remote-Sessions über die API
 $RemoteUrl = 'https://api.anthropic.com/v1/code/sessions?limit=100'
 $MaxItems = 7          # Zeilen pro Listenseite
@@ -83,8 +83,11 @@ function ConvertTo-Window($w) {
   return [ordered]@{ p = [Math]::Round([double]$w.utilization, 1); r = $reset }
 }
 
-# Liefert @{ Session; Week } (je @{ p; r } oder $null) oder wirft eine kurze Fehlermeldung.
-function Get-Usage {
+# Usage-Abruf über die CLI, ohne die Hauptschleife zu blockieren (die CLI braucht 5-15 s,
+# unter Last oder direkt nach dem Login bis zu 60 s): Start-UsageFetch startet die CLI und
+# stellt die Anfrage, Receive-UsageFetch schaut bei jedem Durchlauf nach der Antwort,
+# Close-UsageFetch beendet die CLI.
+function Start-UsageFetch {
   $exe = Find-ClaudeExe
   if (-not $exe) { throw 'Claude-CLI nicht gefunden' }
 
@@ -104,37 +107,63 @@ function Get-Usage {
     if ($k -match '^(CLAUDE|ANTHROPIC)' -and $k -ne 'CLAUDE_CONFIG_DIR') { [void]$psi.Environment.Remove($k) }
   }
 
-  $p = [Diagnostics.Process]::Start($psi)
+  $f = @{ Proc = [Diagnostics.Process]::Start($psi); Deadline = [DateTime]::UtcNow.AddSeconds(60) }
   try {
-    $errTask = $p.StandardError.ReadToEndAsync()  # leer lesen, damit die CLI nie blockiert
-    $p.StandardInput.WriteLine('{"type":"control_request","request_id":"init","request":{"subtype":"initialize"}}')
-    $p.StandardInput.WriteLine('{"type":"control_request","request_id":"usage","request":{"subtype":"get_usage","skip_behaviors":true}}')
-    $p.StandardInput.Flush()
-
-    $resp = $null
-    $deadline = [DateTime]::UtcNow.AddSeconds(60)  # direkt nach einem Login braucht die CLI deutlich länger
-    while (-not $resp) {
-      $task = $p.StandardOutput.ReadLineAsync()
-      # In Scheiben warten: Wird der Task gestoppt, gibt der Collector den Port sofort frei.
-      while (-not $task.Wait(500)) {
-        if ($parent -and $parent.HasExited) { throw 'Task gestoppt' }
-        if ([DateTime]::UtcNow -ge $deadline) { throw 'Zeitueberschreitung beim Abruf' }
-      }
-      $line = $task.Result
-      if ($null -eq $line) {
-        $why = if ($errTask.Wait(2000)) { $errTask.Result -split "`r?`n" | Where-Object { $_.Trim() } | Select-Object -First 1 }
-        throw "Claude-CLI beendet: $why"
-      }
-      if (-not $line.StartsWith('{')) { continue }
-      try { $msg = $line | ConvertFrom-Json -DateKind String } catch { continue }
-      if ($msg.type -eq 'control_response' -and $msg.response.request_id -eq 'usage') { $resp = $msg.response }
-    }
-  } finally {
-    try { $p.StandardInput.Close() } catch { }
-    if (-not $p.WaitForExit(5000)) { try { $p.Kill($true) } catch { } }
-    $p.Dispose()
+    $f.Err = $f.Proc.StandardError.ReadToEndAsync()  # leer lesen, damit die CLI nie blockiert
+    $f.Proc.StandardInput.WriteLine('{"type":"control_request","request_id":"init","request":{"subtype":"initialize"}}')
+    $f.Proc.StandardInput.WriteLine('{"type":"control_request","request_id":"usage","request":{"subtype":"get_usage","skip_behaviors":true}}')
+    $f.Proc.StandardInput.Flush()
+    $f.Read = $f.Proc.StandardOutput.ReadLineAsync()
+  } catch {
+    Close-UsageFetch $f
+    throw
   }
+  return $f
+}
 
+# Liefert @{ Session; Week } (je @{ p; r } oder $null), $null solange die Antwort noch fehlt,
+# oder wirft eine kurze Fehlermeldung. Wartet nie.
+function Receive-UsageFetch($F) {
+  while ($F.Read.IsCompleted) {
+    $line = $F.Read.Result
+    if ($null -eq $line) {
+      $why = if ($F.Err.Wait(1000)) { $F.Err.Result -split "`r?`n" | Where-Object { $_.Trim() } | Select-Object -First 1 }
+      throw "Claude-CLI beendet: $why"
+    }
+    $F.Read = $F.Proc.StandardOutput.ReadLineAsync()
+    if (-not $line.StartsWith('{')) { continue }
+    try { $msg = $line | ConvertFrom-Json -DateKind String } catch { continue }
+    if ($msg.type -eq 'control_response' -and $msg.response.request_id -eq 'usage') { return ConvertFrom-UsageResponse $msg.response }
+  }
+  if ([DateTime]::UtcNow -ge $F.Deadline) { throw 'Zeitueberschreitung beim Abruf' }
+  return $null
+}
+
+# stdin schließen; die CLI beendet sich dann selbst. Sie bekommt dafür 5 s (sie kann gerade
+# den Token erneuern), erst danach wird sie hart beendet. Wartet nicht, das Aufräumen
+# erledigt Remove-ClosedUsageFetch.
+function Close-UsageFetch($F) {
+  try { $F.Proc.StandardInput.Close() } catch { }
+  $F.Until = [DateTime]::UtcNow.AddSeconds(5)
+  $closing.Add($F)
+}
+
+# Beendete CLI-Prozesse freigeben, überfällige hart beenden. -Wait: bis zur Frist warten
+# (beim Beenden des Collectors).
+function Remove-ClosedUsageFetch([switch]$Wait) {
+  for ($i = $closing.Count - 1; $i -ge 0; $i--) {
+    $f = $closing[$i]
+    if ($Wait) { [void]$f.Proc.WaitForExit([int][Math]::Max(0, ($f.Until - [DateTime]::UtcNow).TotalMilliseconds)) }
+    if (-not $f.Proc.HasExited) {
+      if ([DateTime]::UtcNow -lt $f.Until) { continue }
+      try { $f.Proc.Kill($true) } catch { }
+    }
+    $f.Proc.Dispose()
+    $closing.RemoveAt($i)
+  }
+}
+
+function ConvertFrom-UsageResponse($resp) {
   if ($resp.subtype -ne 'success') { throw "CLI-Fehler: $($resp.error)" }
   $u = $resp.response
   if (-not $u.rate_limits_available) { throw 'Nicht angemeldet: claude auth login' }
@@ -203,11 +232,12 @@ function Read-JsonFiles([hashtable]$Cache, $Files, [scriptblock]$Convert) {
 
 # CLI-Sessions dieses Rechners (Desktop-App und Terminal) aus $ClaudeDir\sessions\*.json;
 # die *.key-Dateien dort nie lesen. Valid: Prozess lebt und hat noch dieselbe Startzeit
-# (sonst ist die Datei verwaist oder die PID neu vergeben).
-function Get-LocalSessions([hashtable]$Cache) {
+# (sonst ist die Datei verwaist oder die PID neu vergeben). $Exclude: PIDs der eigenen
+# Usage-Abrufe; die CLI legt dafür kurz einen eigenen Eintrag an.
+function Get-LocalSessions([hashtable]$Cache, [int[]]$Exclude = @()) {
   $files = Get-ChildItem (Join-Path $ClaudeDir 'sessions') -Filter '*.json' -File -ErrorAction SilentlyContinue
   $list = @(foreach ($j in (Read-JsonFiles $Cache $files { param($j) $j })) {
-      if ($j.kind -ne 'interactive') { continue }
+      if ($j.kind -ne 'interactive' -or $Exclude -contains [int]$j.pid) { continue }
       $valid = $false
       try { $valid = [string](Get-Process -Id ([int]$j.pid) -ErrorAction Stop).StartTime.ToFileTimeUtc() -eq [string]$j.procStart } catch { }
       $st = switch ($j.status) { 'busy' { 'w' } 'waiting' { 'a' } default { 'i' } }  # idle, shell
@@ -229,10 +259,15 @@ function Get-LocalSessions([hashtable]$Cache) {
 # Sessions der Desktop-App (Code-Tab). Die App ist ein MSIX-Paket: Für Prozesse außerhalb
 # (Taskplaner) liegen ihre Daten unter Packages\Claude_*\LocalCache\Roaming. Beide Orte
 # prüfen, doppelte per sessionId zusammenführen (neuere gewinnt).
+# NeedsInput: Die App stuft die letzte Antwort als "blocked" ein (Rückfrage, Freigabe) und zeigt
+# die Session gelb, solange die CLI nicht weiterarbeitet.
 function Get-DesktopSessions([hashtable]$Cache) {
   $dirs = @(Join-Path $env:APPDATA 'Claude\claude-code-sessions')
-  $dirs += @(Get-ChildItem (Join-Path $env:LOCALAPPDATA 'Packages') -Directory -Filter 'Claude_*' -ErrorAction SilentlyContinue |
-      ForEach-Object { Join-Path $_.FullName 'LocalCache\Roaming\Claude\claude-code-sessions' })
+  try {
+    foreach ($p in [IO.Directory]::EnumerateDirectories((Join-Path $env:LOCALAPPDATA 'Packages'), 'Claude_*')) {
+      $dirs += Join-Path $p 'LocalCache\Roaming\Claude\claude-code-sessions'
+    }
+  } catch { }
   $files = foreach ($d in $dirs) {
     if (-not (Test-Path -LiteralPath $d)) { continue }
     foreach ($a in ([IO.DirectoryInfo]$d).EnumerateDirectories()) {
@@ -248,6 +283,8 @@ function Get-DesktopSessions([hashtable]$Cache) {
           Activity = [int64][Math]::Floor([double]$j.lastActivityAt / 1000)
           Archived = [bool]$j.isArchived
           Bridges  = @($j.bridgeSessionIds | Where-Object { $_ -is [string] })
+          NeedsInput = $j.postTurnSummary.status_category -eq 'blocked' -and $j.postTurnSummaryFor -and
+            $j.postTurnSummaryFor -eq $j.lastAssistantUuid
         }
       })) {
     if (-not $s.Id) { continue }
@@ -255,6 +292,13 @@ function Get-DesktopSessions([hashtable]$Cache) {
     if (-not $old -or $s.Activity -gt $old.Activity) { $byId[$s.Id] = $s }
   }
   return @($byId.Values)
+}
+
+# Idle-Sessions, die laut Desktop-App auf dich warten (NeedsInput), als wartend führen.
+function Set-DesktopWaiting($Desktop, $Local) {
+  $ids = @{}
+  foreach ($d in $Desktop) { if ($d.NeedsInput) { $ids[$d.Id] = $true } }
+  foreach ($l in $Local) { if ($l.Status -eq 'i' -and $l.HostId -and $ids[$l.HostId]) { $l.Status = 'a' } }
 }
 
 # Liste Seite 1 (lokal): Desktop-Sessions und laufende Terminal-Sessions. Status aus der laufenden
@@ -332,12 +376,9 @@ function ConvertFrom-RemoteSessions([string]$Json, $LocalIds) {
     if ($LocalIds.Contains(($r.id -replace '^(cse|session)_', ''))) { continue }
     $a = [int64]0
     try { $a = [DateTimeOffset]::Parse($r.last_event_at, [Globalization.CultureInfo]::InvariantCulture).ToUnixTimeSeconds() } catch { }
-    # Fertig mit Rückfrage an dich: worker_status idle, aber status_bucket blocked.
-    $s = switch ($r.worker_status) {
-      'running' { 'w' }
-      'requires_action' { 'a' }
-      default { if ($r.status_bucket -eq 'blocked') { 'a' } else { 'i' } }
-    }
+    # Nur worker_status: status_bucket "blocked" ist eine KI-Zusammenfassung nach dem Turn
+    # ("braucht noch etwas von dir") und keine offene Rückfrage.
+    $s = switch ($r.worker_status) { 'running' { 'w' } 'requires_action' { 'a' } default { 'i' } }
     if ($r.connection_status -eq 'disconnected') { $s = 'o' }
     [pscustomobject]@{ n = [string]$r.title; s = $s; a = $a; Id = $r.id; Connected = $r.connection_status -eq 'connected' }
   }
@@ -501,6 +542,8 @@ $badPorts = @{}         # Port -> bis wann überspringen (keine Antwort)
 $portLog = @{}          # Port -> zuletzt geloggte Meldung
 $lastScanError = ''
 $nextPoll = [DateTime]::MinValue
+$usageFetch = $null    # laufender Usage-Abruf (Start-UsageFetch)
+$closing = [Collections.Generic.List[object]]::new()  # beendete Abrufe, deren CLI noch ausläuft
 $nextScan = [DateTime]::MinValue
 $nextSend = [DateTime]::MaxValue
 $nextPresence = [DateTime]::MinValue
@@ -536,25 +579,30 @@ $remoteTask = $null
 $lines = @{}            # zuletzt gebaute list-Zeilen
 $pending = [Collections.Generic.List[string]]::new()  # davon noch zu senden
 $stateSent = $false
-$backlight = -1
 
 try {
   while ($true) {
     $now = [DateTime]::UtcNow
     if ($parent -and $parent.HasExited) { Write-Log 'Task gestoppt'; break }
 
-    if ($now -ge $nextPoll) {
+    # Usage alle 2 min; die CLI läuft nebenher, die Schleife bedient weiter Sessions und Display.
+    $u = $null
+    $fail = $null
+    if (-not $usageFetch -and $now -ge $nextPoll) {
       $nextPoll = $now.AddSeconds($PollSeconds)
-      # Der Abruf blockiert bis zu 60 s; vorher einen Heartbeat senden, damit das
-      # Display währenddessen nicht in den Offline-Screen (90 s) fällt.
-      if ($port) {
-        try {
-          Send-Line $port (Get-StateLine $usage $fetchedAt $err $forecast $locked $dots $sessLine)
-          $nextSend = [DateTime]::UtcNow.AddSeconds($HeartbeatSeconds)
-        } catch { }  # Schreibfehler behandelt der Port-Block unten
+      try { $usageFetch = Start-UsageFetch } catch { $fail = $_ }
+    }
+    if ($usageFetch) {
+      try { $u = Receive-UsageFetch $usageFetch } catch { $fail = $_ }
+      if ($null -ne $u -or $fail) {
+        Close-UsageFetch $usageFetch
+        $usageFetch = $null
       }
+    }
+    if ($closing.Count) { Remove-ClosedUsageFetch }
+    if ($null -ne $u -or $fail) {
       try {
-        $u = Get-Usage
+        if ($fail) { throw $fail }
         $changed = ($u | ConvertTo-Json -Compress -Depth 4) -ne ($usage | ConvertTo-Json -Compress -Depth 4)
         $usage = $u
         $fetchedAt = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
@@ -577,7 +625,6 @@ try {
           $nextSend = [DateTime]::UtcNow
         }
       } catch {
-        if ($parent -and $parent.HasExited) { Write-Log 'Task gestoppt'; break }
         $m = $_.Exception.GetBaseException().Message
         $e = Format-DisplayError $m
         if ($e -ne $err) { Write-Log "Abruf fehlgeschlagen: $m"; $err = $e; $nextSend = [DateTime]::UtcNow }
@@ -596,7 +643,8 @@ try {
           Write-Log $(if ($locked) { 'Bildschirm gesperrt' } else { 'Bildschirm entsperrt' })
           $nextSend = [DateTime]::UtcNow
         }
-        $localSessions = @(Get-LocalSessions $regCache)
+        $own = @(@($usageFetch) + @($closing) | Where-Object { $_ } | ForEach-Object { $_.Proc.Id })
+        $localSessions = @(Get-LocalSessions $regCache $own)
         $localDirty = $true
       }
       if ($now -ge $nextDesktop) {
@@ -627,6 +675,7 @@ try {
       }
 
       if ($localDirty) {
+        Set-DesktopWaiting $desktopSessions $localSessions
         $localItems = @(Get-LocalItems $desktopSessions $localSessions)
         Update-Line 'l1' (Get-ListLine 1 $localItems ([DateTimeOffset]::UtcNow.ToUnixTimeSeconds()) '')
       }
@@ -662,7 +711,6 @@ try {
             $rx = ''
             $nextSend = [DateTime]::UtcNow.AddMilliseconds(1500)  # falls das Board beim Öffnen neu startet
             $stateSent = $false
-            $backlight = -1
             Reset-Pending
             break
           } catch {
@@ -693,11 +741,7 @@ try {
           if ($msg.t -eq 'hello') {
             Write-Log "Display gestartet (Firmware $($msg.fw))"
             $nextSend = [DateTime]::UtcNow
-            $backlight = -1
             Reset-Pending
-          } elseif ($msg.t -eq 'ack' -and $msg.b -is [long]) {
-            if ($backlight -ge 0 -and [int]$msg.b -ne $backlight) { Write-Log "Display-Helligkeit $backlight -> $($msg.b) (LDR $($msg.l))" }
-            $backlight = [int]$msg.b
           }
         }
         if ($rx.Length -gt 4096) { $rx = '' }
@@ -734,6 +778,8 @@ try {
   }
 } finally {
   if ($port) { try { $port.Dispose() } catch { } }
+  if ($usageFetch) { Close-UsageFetch $usageFetch }
+  Remove-ClosedUsageFetch -Wait
   $mutex.ReleaseMutex()
   Write-Log 'Collector beendet'
 }

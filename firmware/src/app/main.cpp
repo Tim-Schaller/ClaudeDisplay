@@ -12,10 +12,6 @@ static const uint32_t OFFLINE_AFTER_MS = 90000;
 static const uint32_t FRAME_MS = 40;            // Bildaufbau (Dot-Animation braucht < 300 ms)
 static const uint32_t TAP_GAP_MS = 300;         // Entprellung: so lange vorher keine Berührung
 static const uint32_t PAGE_TIMEOUT_MS = 60000;  // ohne Touch zurück auf Seite 0
-static const int LDR_PIN = 34;
-static const uint16_t LDR_DARK = 40, LDR_BRIGHT = 10;  // höher = dunkler
-static const uint8_t LDR_HOLD_S = 10;                  // so lange muss ein Wechsel anstehen
-static const uint8_t BRIGHTNESS_DAY = 255, BRIGHTNESS_DARK = 26;  // dunkel: ca. 10 %
 static const uint32_t FADE_MS = 1000;
 
 static char line[1024];
@@ -31,8 +27,6 @@ static int64_t hostEpoch = 0;  // zuletzt empfangene Host-Uhrzeit ...
 static uint32_t hostEpochMs = 0;  // ... und wann sie ankam
 
 static bool locked = false;  // Windows-Sitzung gesperrt (bleibt auch offline erhalten)
-static bool dark = false;    // Raum dunkel laut LDR (Start: hell)
-static uint16_t ldr = 0;     // letzter LDR-Mittelwert (roh)
 
 static uint8_t page = 0;
 static uint32_t lastTouchMs = 0, lastTapMs = 0;
@@ -42,7 +36,7 @@ static int64_t nowEpoch() {
 }
 
 static uint8_t targetBrightness() {
-  return locked ? 0 : dark ? BRIGHTNESS_DARK : BRIGHTNESS_DAY;
+  return locked ? 0 : 255;
 }
 
 // Zahl lesen; nimmt auch Gleitkomma an. Fehlt sie, gilt def.
@@ -98,8 +92,8 @@ static void handleState(const JsonDocument &doc) {
 
   haveData = true;
   lastRxMs = millis();
-  Serial.printf("{\"t\":\"ack\",\"s\":%.1f,\"w\":%.1f,\"b\":%u,\"l\":%u}\n", vm.session.pct,
-                vm.week.pct, targetBrightness(), ldr);
+  Serial.printf("{\"t\":\"ack\",\"s\":%.1f,\"w\":%.1f,\"b\":%u}\n", vm.session.pct, vm.week.pct,
+                targetBrightness());
 }
 
 
@@ -179,30 +173,11 @@ static void pollTouch() {
   lastTapMs = millis();
 }
 
-static uint16_t readLdr() {
-  uint32_t sum = 0;
-  for (int i = 0; i < 32; i++) sum += analogRead(LDR_PIN);
-  return sum / 32;
-}
-
-// Auto-Helligkeit: LDR 1x/s, "dunkel" ab > 40, "hell" unter 10, jeweils erst wenn der
-// Wert 10 s ansteht. Gesperrt: Backlight aus. Übergänge weich (ca. 1 s).
+// Backlight voll an, bei gesperrter Windows-Sitzung aus; Übergänge weich (ca. 1 s).
+// (Der Lichtsensor ist zu unzuverlässig: in einem Gehäuse misst er schon bei normalem
+// Raumlicht "dunkel".)
 static void updateBrightness() {
-  static uint32_t lastSample = 0;
-  static uint8_t holdS = 0;
-  if (millis() - lastSample >= 1000) {
-    lastSample = millis();
-    ldr = readLdr();
-    // Während der Sperre misst der LDR ohne eigenes Backlight zu dunkel: nicht auswerten.
-    const bool flip = !locked && (dark ? ldr < LDR_BRIGHT : ldr > LDR_DARK);
-    holdS = flip ? holdS + 1 : 0;
-    if (holdS > LDR_HOLD_S) {  // 11 Messungen in Folge = 10 s
-      dark = !dark;
-      holdS = 0;
-    }
-  }
-
-  static uint8_t from = BRIGHTNESS_DAY, to = BRIGHTNESS_DAY, cur = BRIGHTNESS_DAY;
+  static uint8_t from = 255, to = 255, cur = 255;
   static uint32_t fadeStart = 0;
   const uint8_t target = targetBrightness();
   if (target != to) {
@@ -218,8 +193,6 @@ static void updateBrightness() {
 void setup() {
   Serial.setRxBufferSize(2048);
   Serial.begin(115200);
-  analogSetPinAttenuation(LDR_PIN, ADC_0db);
-  ldr = readLdr();
   uiBegin(FW_VERSION);
   Serial.printf("{\"t\":\"hello\",\"fw\":\"%s\"}\n", FW_VERSION);
 }
