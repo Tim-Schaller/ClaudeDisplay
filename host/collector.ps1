@@ -5,8 +5,8 @@
   - Holt alle 2 Minuten den 5h-/7d-Verbrauch über die Claude-CLI (Control-Request
     "get_usage" im Headless-Modus, derselbe Weg wie die Desktop-App). Das verbraucht
     kein Kontingent; Anmeldung und Token-Refresh erledigt die CLI selbst.
-  - Schreibt den Stand atomar nach %USERPROFILE%\.usage-display\latest.json und den
-    Verlauf (8 Tage) nach history.json; daraus Tagesreihe (hist) und Prognose (f).
+  - Schreibt den Stand atomar nach %USERPROFILE%\.usage-display\latest.json und rechnet
+    die Prognose (f, e) ab Fensterbeginn hoch.
   - Sammelt die Sessions: lokal aus der CLI-Registry (alle 2 s) und der Desktop-App
     (alle 10 s), Remote-Sessions anderer Rechner (Remote Control) über die API (alle 30 s,
     asynchron). Optionale eigene Seitentitel in config.json (remoteLabel, localLabel).
@@ -15,7 +15,7 @@
     aus config.json ("port"). Ein Port gilt erst als Display, wenn das Board antwortet (ack
     oder hello binnen 6 s); sonst wird er wieder geschlossen und 10 min übersprungen.
   - Hält den Port offen und sendet als NDJSON: state sofort bei Änderung und alle 30 s
-    (Heartbeat + Uhrzeit), hist und list bei Änderung. Nach dem Verbinden bzw. hello alles einmal.
+    (Heartbeat + Uhrzeit, Dots, Session-Zeile), list bei Änderung. Nach dem Verbinden bzw. hello alles einmal.
   - Übersteht Ab- und Anstecken; schreibt ein knappes Log nach collector.log
     (nie Session-Titel, nie Token).
 #>
@@ -24,7 +24,6 @@ $ErrorActionPreference = 'Stop'
 
 $DataDir = Join-Path $env:USERPROFILE '.usage-display'
 $LatestFile = Join-Path $DataDir 'latest.json'
-$HistoryFile = Join-Path $DataDir 'history.json'
 $LogFile = Join-Path $DataDir 'collector.log'
 $ConfigFile = Join-Path $DataDir 'config.json'
 $PollSeconds = 120
@@ -32,7 +31,6 @@ $HeartbeatSeconds = 30
 $LocalSeconds = 2      # CLI-Registry und Bildschirmsperre
 $DesktopSeconds = 10   # Session-Dateien der Desktop-App
 $RemoteSeconds = 30    # Remote-Sessions über die API
-$HistoryDays = 8
 $RemoteUrl = 'https://api.anthropic.com/v1/code/sessions?limit=100'
 $MaxItems = 7          # Zeilen pro Listenseite
 $MaxLine = 1023        # Zeilenpuffer des Boards
@@ -158,60 +156,9 @@ function Save-Latest($Usage, [int64]$FetchedAt) {
   [IO.File]::Move($tmp, $LatestFile, $true)
 }
 
-# --- Verlauf und Prognose ----------------------------------------------------
-
-# Verlauf: ein Sample {t, s, w} je erfolgreichem Abruf (Prozent, $null = unbekannt),
-# zeitlich aufsteigend. Fehlt die Datei oder ist sie kaputt, beginnt er leer.
-function Read-History([string]$Path) {
-  $list = [Collections.Generic.List[object]]::new()
-  try {
-    foreach ($x in (Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json)) {
-      if ($null -ne $x.t) { $list.Add([pscustomobject]@{ t = [int64]$x.t; s = $x.s; w = $x.w }) }
-    }
-  } catch { }
-  return , $list
-}
-
-function Add-Sample($Samples, $Usage, [int64]$At) {
-  $Samples.Add([pscustomobject]@{
-      t = $At
-      s = if ($Usage.Session) { $Usage.Session.p } else { $null }
-      w = if ($Usage.Week) { $Usage.Week.p } else { $null }
-    })
-  while ($Samples.Count -and $Samples[0].t -lt $At - $HistoryDays * 86400) { $Samples.RemoveAt(0) }
-}
-
-function Save-History($Samples, [string]$Path) {
-  $tmp = "$Path.tmp"
-  ConvertTo-Json -InputObject @($Samples) -Compress | Set-Content -Path $tmp -Encoding utf8
-  [IO.File]::Move($tmp, $Path, $true)
-}
+# --- Prognose ---------------------------------------------------------------
 
 function Get-TzMinutes { return [int][TimeZoneInfo]::Local.GetUtcOffset([DateTimeOffset]::UtcNow).TotalMinutes }
-
-# Lokaler Tagesbeginn (00:00) als Unix-Sekunden, mit dem aktuellen UTC-Offset gerechnet
-# wie im Board (now + tz): So passt "day" auch an Tagen mit Zeitumstellung.
-function Get-DayStart([int64]$Now, [int]$TzMinutes) {
-  $local = $Now + $TzMinutes * 60
-  return $Now - (($local % 86400) + 86400) % 86400
-}
-
-# Tagesreihe: 96 Buckets à 15 min ab $Day; Wert = letztes Sample im Bucket
-# (gerundet, max. 100), -1 = keine Daten.
-function Get-DaySeries($Samples, [string]$Key, [int64]$Day) {
-  $v = [int[]]::new(96)
-  for ($i = 0; $i -lt 96; $i++) { $v[$i] = -1 }
-  foreach ($x in $Samples) {
-    $p = $x.$Key
-    if ($null -eq $p -or $x.t -lt $Day -or $x.t -ge $Day + 86400) { continue }
-    $v[[int][Math]::Floor(($x.t - $Day) / 900)] = [int][Math]::Min(100, [Math]::Round([double]$p, [MidpointRounding]::AwayFromZero))
-  }
-  return , $v
-}
-
-function Get-HistLine($Samples, [string]$Key, [int64]$Day) {
-  return ([ordered]@{ t = 'hist'; k = $Key; day = $Day; v = (Get-DaySeries $Samples $Key $Day) } | ConvertTo-Json -Compress)
-}
 
 # Prognose: @{ f; e } oder $null (Fenster läuft noch zu kurz). f = Zeitpunkt, an dem beim
 # Durchschnittstempo seit Fensterbeginn 100 % erreicht sind, 0 = nicht vor dem Reset; dann
@@ -402,6 +349,17 @@ function Get-Dots($Local, $Remote) {
   return "$l$r"
 }
 
+# Session-Zeile (Seite 0): eine wartende Session hat Vorrang vor einer arbeitenden, jeweils
+# die zuletzt aktive; m = weitere aktive Sessions. Laufen nur idle Sessions: s = i. Sonst $null.
+function Get-SessionLine($LocalItems, $Remote) {
+  $live = @(@($LocalItems) + @($Remote) | Where-Object { $_ -and $_.s -ne 'o' })
+  $active = @($live | Where-Object { $_.s -eq 'a' -or $_.s -eq 'w' } |
+      Sort-Object @{ e = { $_.s -eq 'a' }; Descending = $true }, @{ e = 'a'; Descending = $true })
+  if ($active.Count -eq 0) { if ($live.Count) { return [ordered]@{ s = 'i' } } else { return $null } }
+  $n = ConvertTo-DisplayTitle $active[0].n
+  return [ordered]@{ s = $active[0].s; n = $(if ($n) { $n } else { '(ohne Titel)' }); m = $active.Count - 1 }
+}
+
 # Gesperrt = der Sperrbildschirm (LogonUI.exe) läuft.
 function Test-ScreenLocked { return [bool](Get-Process LogonUI -ErrorAction SilentlyContinue) }
 
@@ -447,7 +405,7 @@ function Send-Line($Port, [string]$Line) {
   $Port.Write($Line + "`n")
 }
 
-function Get-StateLine($Usage, [int64]$FetchedAt, [string]$ErrorText, $Forecast, [bool]$Locked, [string]$Dots) {
+function Get-StateLine($Usage, [int64]$FetchedAt, [string]$ErrorText, $Forecast, [bool]$Locked, [string]$Dots, $Sess) {
   $state = [ordered]@{
     t   = 'state'
     now = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
@@ -470,6 +428,7 @@ function Get-StateLine($Usage, [int64]$FetchedAt, [string]$ErrorText, $Forecast,
   if ($ErrorText) { $state.err = $ErrorText }
   $state.lock = [int]$Locked
   $state.d = $Dots
+  if ($Sess) { $state.x = $Sess }
   return ($state | ConvertTo-Json -Compress -Depth 4)
 }
 
@@ -493,17 +452,17 @@ function Get-ListLine([int]$Page, $Items, [int64]$At, [string]$ErrorText) {
   }
 }
 
-# hist-/list-Zeilen merken; geänderte zum Senden vormerken (Schlüssel hs, hw, l1, l2).
+# list-Zeilen merken; geänderte zum Senden vormerken (Schlüssel l1, l2).
 function Update-Line([string]$Key, [string]$Line) {
   if ($lines[$Key] -ceq $Line) { return }
   $lines[$Key] = $Line
   if (-not $pending.Contains($Key)) { $pending.Add($Key) }
 }
 
-# Nach Verbindungsaufbau bzw. hello alle vorhandenen hist-/list-Zeilen erneut senden.
+# Nach Verbindungsaufbau bzw. hello alle vorhandenen list-Zeilen erneut senden.
 function Reset-Pending {
   $pending.Clear()
-  foreach ($k in 'hs', 'hw', 'l1', 'l2') { if ($lines[$k]) { $pending.Add($k) } }
+  foreach ($k in 'l1', 'l2') { if ($lines[$k]) { $pending.Add($k) } }
 }
 
 # --- Hauptschleife -----------------------------------------------------------
@@ -514,8 +473,7 @@ $mutex = [Threading.Mutex]::new($false, 'Local\ClaudeUsageDisplayCollector')
 try { $owned = $mutex.WaitOne(0) } catch [Threading.AbandonedMutexException] { $owned = $true }
 if (-not $owned) { Write-Log 'Collector laeuft bereits, beende diese Instanz.'; exit 0 }
 
-$history = Read-History $HistoryFile
-Write-Log "Collector gestartet (PID $PID, CLI: $(Find-ClaudeExe), Verlauf: $($history.Count) Samples)"
+Write-Log "Collector gestartet (PID $PID, CLI: $(Find-ClaudeExe))"
 
 # Unter dem Taskplaner ist "conhost --headless" der Elternprozess. Stoppt man den Task,
 # endet nur conhost; dann beendet sich auch der Collector und gibt den Port frei.
@@ -546,6 +504,8 @@ $nextDesktop = [DateTime]::MinValue
 $nextRemote = [DateTime]::MinValue
 $locked = $false
 $dots = ''
+$sessLine = $null      # Session-Zeile (Feld x im state)
+$localItems = @()
 $localSessions = @()    # Registry-Einträge (auch verwaiste, für die Bridge-IDs)
 $desktopSessions = @()
 $regCache = @{}
@@ -568,8 +528,7 @@ $remote = @()           # letzte gute Remote-Liste (andere Rechner)
 $remoteAt = [int64]0
 $remoteErr = ''
 $remoteTask = $null
-$histDay = [int64]0
-$lines = @{}            # zuletzt gebaute hist-/list-Zeilen
+$lines = @{}            # zuletzt gebaute list-Zeilen
 $pending = [Collections.Generic.List[string]]::new()  # davon noch zu senden
 $stateSent = $false
 $backlight = -1
@@ -585,7 +544,7 @@ try {
       # Display währenddessen nicht in den Offline-Screen (90 s) fällt.
       if ($port) {
         try {
-          Send-Line $port (Get-StateLine $usage $fetchedAt $err $forecast $locked $dots)
+          Send-Line $port (Get-StateLine $usage $fetchedAt $err $forecast $locked $dots $sessLine)
           $nextSend = [DateTime]::UtcNow.AddSeconds($HeartbeatSeconds)
         } catch { }  # Schreibfehler behandelt der Port-Block unten
       }
@@ -595,9 +554,7 @@ try {
         $usage = $u
         $fetchedAt = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
         Save-Latest $usage $fetchedAt
-        Add-Sample $history $usage $fetchedAt
-        try { Save-History $history $HistoryFile } catch { Write-Log "Verlauf nicht gespeichert: $($_.Exception.Message)" }
-        $histDay = 0  # Tagesreihen neu berechnen
+
         $fc = [ordered]@{
           s = Get-Forecast 's' $usage.Session $fetchedAt
           w = Get-Forecast 'w' $usage.Week $fetchedAt
@@ -622,7 +579,7 @@ try {
       }
     }
 
-    # Sessions, Sperre und Tagesreihen. Fehler hier dürfen die Schleife nicht beenden.
+    # Sessions und Sperre. Fehler hier dürfen die Schleife nicht beenden.
     try {
       $localDirty = $false
       $remoteDirty = $false
@@ -665,23 +622,21 @@ try {
       }
 
       if ($localDirty) {
-        Update-Line 'l1' (Get-ListLine 1 (Get-LocalItems $desktopSessions $localSessions) ([DateTimeOffset]::UtcNow.ToUnixTimeSeconds()) '')
+        $localItems = @(Get-LocalItems $desktopSessions $localSessions)
+        Update-Line 'l1' (Get-ListLine 1 $localItems ([DateTimeOffset]::UtcNow.ToUnixTimeSeconds()) '')
       }
       if ($remoteDirty) { Update-Line 'l2' (Get-ListLine 2 $remote $remoteAt $remoteErr) }
       if ($localDirty -or $remoteDirty) {
         $d = Get-Dots $localSessions $remote
-        if ($d -ne $dots) { $dots = $d; $nextSend = [DateTime]::UtcNow }
-      }
-
-      # Tagesreihen nach jedem Abruf und beim Tageswechsel neu berechnen.
-      $day = Get-DayStart ([DateTimeOffset]::UtcNow.ToUnixTimeSeconds()) (Get-TzMinutes)
-      if ($day -ne $histDay) {
-        $histDay = $day
-        Update-Line 'hs' (Get-HistLine $history 's' $day)
-        Update-Line 'hw' (Get-HistLine $history 'w' $day)
+        $x = Get-SessionLine $localItems $remote
+        if ($d -ne $dots -or ($x | ConvertTo-Json -Compress) -ne ($sessLine | ConvertTo-Json -Compress)) {
+          $dots = $d
+          $sessLine = $x
+          $nextSend = [DateTime]::UtcNow
+        }
       }
     } catch {
-      $m = "Sessions/Verlauf: $($_.Exception.Message)"
+      $m = "Sessions: $($_.Exception.Message)"
       if ($m -ne $lastScanError) { Write-Log $m; $lastScanError = $m }
     }
 
@@ -750,11 +705,11 @@ try {
           Write-PortLog $name "Kein Display an $name (keine Antwort)"
           $nextScan = [DateTime]::UtcNow.AddSeconds(3)
         } elseif ([DateTime]::UtcNow -ge $nextSend) {
-          Send-Line $port (Get-StateLine $usage $fetchedAt $err $forecast $locked $dots)
+          Send-Line $port (Get-StateLine $usage $fetchedAt $err $forecast $locked $dots $sessLine)
           $nextSend = [DateTime]::UtcNow.AddSeconds($HeartbeatSeconds)
           $stateSent = $true
         } elseif ($verified -and $stateSent -and $pending.Count) {
-          # hist/list einzeln pro Durchlauf (250 ms), damit der Empfangspuffer des Boards
+          # list einzeln pro Durchlauf (250 ms), damit der Empfangspuffer des Boards
           # (2 KB) auch während eines Redraws nicht überläuft.
           $k = $pending[0]
           $pending.RemoveAt(0)

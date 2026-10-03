@@ -33,10 +33,10 @@ static const uint32_t C_OFFLINE = 0x475569;
 
 static const int W = 320, H = 240;
 static const int BAR_H = 26, FOOTER_Y = 214, GAUGE_Y = BAR_H;
-static const int GW = 160, GH = 188;
+static const int GW = 160, GH = 158;
 static const float GCX = 80, GCY = 66, R_MID = 54, HALF_W = 7;
 static const float A_START = -135, A_END = 135;  // Grad, 0 = oben, im Uhrzeigersinn
-static const int CHART_X = 8, CHART_TOP = 158, CHART_BASE = 184;  // Verlauf im Gauge-Sprite
+static const int SESS_Y = 186;                                     // Session-Zeile auf Seite 0
 static const int ROW_Y = 28, ROW_H = 26;                          // Listenzeilen
 static const int FOOT_DOTS = 24;
 
@@ -162,13 +162,6 @@ static void fitText(LovyanGFX &g, char *buf, int maxW, bool ellipsis) {
   if (ellipsis) strcat(buf, "...");
 }
 
-// Tagesreihe nur verwenden, wenn sie zum heutigen lokalen Tag gehört. Toleranz 1 h,
-// weil sich der UTC-Offset am Tag der Zeitumstellung seit Mitternacht geändert hat.
-static const int8_t *todaySeries(const Series &s, int64_t now, int tzMin) {
-  if (now <= 0 || s.day <= 0) return nullptr;
-  int64_t start = now - localSecs(now, tzMin);
-  return llabs(s.day - start) <= 3600 ? s.v : nullptr;
-}
 
 // --- Dots ------------------------------------------------------------------
 
@@ -197,8 +190,11 @@ static void pushDot(int x, int y, int r, char st) {
   dot.pushSprite(x - 5, y - 5);
 }
 
+static char sessSt = 0;  // Status des Dots in der Session-Zeile (0 = nicht angezeigt)
+
 // Nur die Dots neu zeichnen, deren Phase gewechselt hat.
 static void animateDots(bool pulse, bool blink) {
+  if ((sessSt == 'w' && pulse) || (sessSt == 'a' && blink)) pushDot(14, SESS_Y + BAR_H / 2, 5, sessSt);
   for (int i = 0; i < footN; i++) {
     if ((footSt[i] == 'w' && pulse) || (footSt[i] == 'a' && blink)) {
       pushDot(footX[i], FOOTER_Y + BAR_H / 2, 4, footSt[i]);
@@ -255,31 +251,8 @@ static void drawRing(float pct, uint32_t color) {
   }
 }
 
-static int chartX(int bucket) { return CHART_X + (bucket * 3 + 1) / 2; }  // 1,5 px je Bucket
-static int chartY(int pct) { return CHART_BASE - (pct * (CHART_BASE - CHART_TOP) + 50) / 100; }
-
-// Tagesverlauf: Grundlinie, Ticks bei 6/12/18 Uhr, "Jetzt"-Strich, Linie ohne Lücken.
-static void drawChart(const int8_t *v, int nowBucket) {
-  gauge.drawFastHLine(CHART_X, CHART_BASE, chartX(HIST_N) - CHART_X + 1, C_TRACK);
-  for (int h = 6; h <= 18; h += 6) gauge.drawFastVLine(chartX(h * 4), CHART_BASE + 1, 3, C_TRACK);
-  if (nowBucket >= 0) {
-    gauge.drawFastVLine(chartX(nowBucket), CHART_TOP, CHART_BASE - CHART_TOP + 1, C_DIM);
-  }
-  if (!v) return;
-  for (int i = 0; i < HIST_N; i++) {
-    if (v[i] < 0) continue;
-    if (i + 1 < HIST_N && v[i + 1] >= 0) {
-      gauge.drawLine(chartX(i), chartY(v[i]), chartX(i + 1), chartY(v[i + 1]),
-                     levelColor(v[i + 1]));
-    } else if (i == 0 || v[i - 1] < 0) {
-      gauge.drawPixel(chartX(i), chartY(v[i]), levelColor(v[i]));  // einzelner Messpunkt
-    }
-  }
-}
-
 static void renderGauge(int x, const char *title, const Window &w, const char *reset,
-                        const char *forecast, uint32_t fcColor, const int8_t *hist,
-                        int nowBucket) {
+                        const char *forecast, uint32_t fcColor) {
   const bool known = w.pct >= 0;
   const float p = known ? fminf(fmaxf(w.pct, 0), 100) : 0;
   gauge.fillSprite(C_BG);
@@ -321,9 +294,43 @@ static void renderGauge(int x, const char *title, const Window &w, const char *r
     gauge.setTextColor(fcColor);
     gauge.drawString(forecast, (int)GCX, 146);
   }
-  drawChart(hist, nowBucket);
-
   gauge.pushSprite(x, GAUGE_Y);
+}
+
+// Session-Zeile unter den Gauges: wartende Session (Vorrang) bzw. arbeitende, mit
+// animiertem Dot; weitere aktive Sessions als "+n" rechts. Ohne Angabe leer.
+static void renderSessionLine(const SessionLine &s) {
+  bar.fillSprite(C_BG);
+  sessSt = s.st;
+  bar.setFont(&fonts::FreeSans9pt7b);
+  bar.setTextDatum(middle_left);
+  if (s.st == 'i') {
+    paintDot(bar, 14, BAR_H / 2, 5, 'i');
+    bar.setTextColor(C_DIM);
+    bar.drawString("alle Sessions idle", 28, BAR_H / 2);
+  } else if (s.st == 'a' || s.st == 'w') {
+    paintDot(bar, 14, BAR_H / 2, 5, s.st);
+    const char *prefix = s.st == 'a' ? "wartet: " : "arbeitet: ";
+    bar.setTextColor(s.st == 'a' ? C_AMBER : C_GREEN);
+    bar.drawString(prefix, 28, BAR_H / 2);
+    const int x = 28 + bar.textWidth(prefix);
+    int right = W - 8;
+    if (s.more > 0) {
+      char more[8];
+      snprintf(more, sizeof more, "+%u", s.more);
+      bar.setTextDatum(middle_right);
+      bar.setTextColor(C_DIM);
+      bar.drawString(more, right, BAR_H / 2);
+      right -= bar.textWidth(more) + 8;
+      bar.setTextDatum(middle_left);
+    }
+    char name[sizeof s.name + 3];
+    strlcpy(name, s.name, sizeof s.name);
+    fitText(bar, name, right - x, true);
+    bar.setTextColor(C_TEXT);
+    bar.drawString(name, x, BAR_H / 2);
+  }
+  bar.pushSprite(0, SESS_Y);
 }
 
 // --- Kopf-, Fußzeile und Listenzeilen --------------------------------------
@@ -483,7 +490,7 @@ bool uiTouched() {
 void uiRender(const ViewModel &vm) {
   static Screen lastScreen = (Screen)-1;
   static uint8_t lastPage = 255;
-  static char lastHeader[40], lastFooter[160], lastG[2][128], lastNotice[64];
+  static char lastHeader[40], lastFooter[160], lastG[2][128], lastNotice[64], lastSess[64];
   static char lastRow[LIST_MAX][64], lastMode;
 
   // Animationsphase der Dots: w 600 ms an/gedimmt, a 300 ms an/aus.
@@ -498,10 +505,11 @@ void uiRender(const ViewModel &vm) {
     lastScreen = vm.screen;
     lastPage = vm.page;
     lcd.fillScreen(C_BG);
-    lastHeader[0] = lastFooter[0] = lastG[0][0] = lastG[1][0] = lastNotice[0] = 0;
+    lastHeader[0] = lastFooter[0] = lastG[0][0] = lastG[1][0] = lastNotice[0] = lastSess[0] = 0;
     for (auto &r : lastRow) r[0] = 0;
     lastMode = 0;
     footN = 0;
+    sessSt = 0;
     memset(rowSt, 0, sizeof rowSt);
   }
 
@@ -524,18 +532,21 @@ void uiRender(const ViewModel &vm) {
   if (vm.screen == Screen::Usage && vm.page == 0) {
     const Window *win[2] = {&vm.session, &vm.week};
     static const char *const TITLE[2] = {"Session", "Woche"};
-    const int bucket = vm.now > 0 ? localSecs(vm.now, vm.tzMin) / 900 : -1;
     for (int k = 0; k < 2; k++) {
       char reset[32], fc[32], sig[128];
       fmtCountdown(reset, sizeof reset, *win[k], vm.now);
       const uint32_t fcColor = fmtForecast(fc, sizeof fc, *win[k], vm.now, vm.tzMin);
-      const int8_t *hist = todaySeries(vm.hist[k], vm.now, vm.tzMin);
-      snprintf(sig, sizeof sig, "%.1f|%s|%s|%lu|%d|%d", win[k]->pct, reset, fc,
-               (unsigned long)vm.hist[k].rev, hist != nullptr, bucket);
+      snprintf(sig, sizeof sig, "%.1f|%s|%s", win[k]->pct, reset, fc);
       if (strcmp(sig, lastG[k]) != 0) {
         strcpy(lastG[k], sig);
-        renderGauge(k * GW, TITLE[k], *win[k], reset, fc, fcColor, hist, bucket);
+        renderGauge(k * GW, TITLE[k], *win[k], reset, fc, fcColor);
       }
+    }
+    char sess[sizeof lastSess];
+    snprintf(sess, sizeof sess, "%c|%u|%s", vm.sess.st ? vm.sess.st : '-', vm.sess.more, vm.sess.name);
+    if (strcmp(sess, lastSess) != 0) {
+      strcpy(lastSess, sess);
+      renderSessionLine(vm.sess);
     }
     if (vm.err[0]) {
       snprintf(footText, sizeof footText, "%s", vm.err);

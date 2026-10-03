@@ -1,7 +1,7 @@
 #Requires -Version 7.5
 <#
   Macht install.ps1 rückgängig: Task entfernen, Collector beenden,
-  %USERPROFILE%\.usage-display (Script, Log, latest.json, Verlauf, config.json) löschen.
+  %USERPROFILE%\.usage-display (Script, Log, latest.json, config.json) löschen.
   -Logout          meldet zusätzlich die Claude-CLI ab (claude auth logout)
   -RemovePlatformIO löscht zusätzlich %USERPROFILE%\.platformio (Build-Werkzeuge)
   Die Firmware bleibt auf dem Display; Original wiederherstellen: siehe README.

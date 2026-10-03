@@ -13,7 +13,7 @@ Remote Control list     ─┘    PowerShell 7)
 
 - **Host:** `host/collector.ps1` fetches the usage every 2 minutes, reads the state of the
   local sessions every 2 s and the Remote Control sessions of other machines every 30 s.
-  It keeps a history for the chart and the forecast and sends everything to the display.
+  It computes a forecast and sends everything to the display.
 - **Display:** three pages, tap to switch (Home → Local → Remote), back to Home after
   60 s without a tap. Brightness follows the light sensor; the backlight turns off while
   Windows is locked.
@@ -49,7 +49,7 @@ Remote Control list     ─┘    PowerShell 7)
 | Path | Purpose |
 |---|---|
 | `firmware/` | PlatformIO project: envs `app` (ST7789) and `app-ili9341` = display, `test-st7789`/`test-ili9341` = test image |
-| `host/collector.ps1` | Background process: usage, sessions, history (`history.json`), `latest.json`, serial |
+| `host/collector.ps1` | Background process: usage, forecast, sessions, `latest.json`, serial |
 | `host/claude-cli.ps1` | Finds the Claude CLI (used by `collector.ps1` and the install scripts) |
 | `host/install.ps1` | Sets up autostart (Task Scheduler, no admin) and signs in the CLI |
 | `host/uninstall.ps1` | Undoes everything |
@@ -246,7 +246,7 @@ internally. It briefly starts the Claude CLI in headless mode
 │  │Session │          │ Woche  │        │  yellow around 80 %, red from 95 %
 │ Reset 3 h 14 min      Reset 3 T 2 h    │
 │ Limit ca. 13:40     ca. 38 % bis Reset │  forecast
-│ ▁▂▃▅▂▁▂▃▅  |          ▁▁▂▂▃▃  |        │  today's history (0–24 h), | = now
+│ ● wartet: API client refactoring    +1 │  session line
 │ ● ● | ● ● ●                Stand 11:35 │  dots: one per running session
 └────────────────────────────────────────┘
 ```
@@ -259,7 +259,10 @@ internally. It briefly starts the Claude CLI in headless mode
   projected value at reset, colored like the gauges). Example: 20 % after 2.6 h →
   7.7 %/h → about 38 % at reset. It only appears 30 min (session) or 12 h (week) after
   the window started; before that it would be too jumpy.
-- **History:** today's curve in 15-minute steps, stored in `history.json` (8 days).
+- **Session line:** the session that is waiting for you (orange, "wartet: …" = waiting),
+  otherwise the one that is working (green, "arbeitet: …" = working), with its title;
+  "+1" etc. counts further active sessions. Local and remote sessions both count. If all
+  running sessions are idle it says "alle Sessions idle"; without running sessions it is empty.
 - **Dots:** local sessions on the left, connected remote sessions after the separator.
   Pulsing green = working, fast-blinking orange = waiting for you (permission or
   question), gray = idle.
@@ -316,7 +319,7 @@ nothing else.
 ```json
 {"t":"state","now":1790975844,"tz":120,
  "s":{"p":17.0,"r":1791031800,"f":1790990400},"w":{"p":24.0,"r":1791284400,"f":0,"e":44},
- "at":1790975800,"lock":0,"d":"w|iiii"}
+ "at":1790975800,"lock":0,"d":"w|aiii","x":{"s":"a","n":"API client refactoring","m":1}}
 ```
 
 | Field | Meaning |
@@ -328,14 +331,7 @@ nothing else.
 | `err` | Short error text for the footer (ASCII, max. 44 characters). Missing when all is well |
 | `lock` | `1` = Windows locked → backlight off (also stays in effect while offline) |
 | `d` | Dots: one character per running session, `w` working, `a` waiting, `i` idle; local first, then `\|`, then remote (max. 24) |
-
-`hist`: daily history, one message per window (`k` = `s` or `w`), on change and after `hello`.
-
-```json
-{"t":"hist","k":"s","day":1790892000,"v":[-1,-1,…,12,15,17,-1,…]}
-```
-
-`day` = local start of the day 00:00 (Unix s), `v` = 96 values of 15 min each (0–100, `-1` = no data).
+| `x` | Session line: `s` = `a` waiting / `w` working / `i` all idle, `n` = title (ASCII, max. 40), `m` = number of further active sessions. Missing = no running sessions |
 
 `list`: session list for page `p` (1 = local, 2 = remote), on change and after `hello`.
 
@@ -351,7 +347,7 @@ Max. 7 entries, newest first. `n` = title (max. 40 characters), `s` = `w` workin
 
 | Message | When |
 |---|---|
-| `{"t":"hello","fw":"2.3.0"}` | After start-up. The host immediately sends `state`, both `hist` and both `list` |
+| `{"t":"hello","fw":"2.4.0"}` | After start-up. The host immediately sends `state` and both `list` |
 | `{"t":"ack","s":17.0,"w":24.0,"b":255,"l":0}` | After every `state`: the accepted values, target brightness `b` (0–255), raw light sensor value `l` |
 
 **Timing:** usage every 120 s, local sessions every 2 s, remote list every 30 s, lock

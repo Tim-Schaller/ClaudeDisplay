@@ -2,7 +2,6 @@
 
 #include <stdint.h>
 
-static const int HIST_N = 96;   // Tagesverlauf: 96 Buckets à 15 min (lokale Zeit)
 static const int LIST_MAX = 7;  // Einträge je Session-Liste
 
 // Ein Limit-Fenster (5-Stunden-Session oder 7-Tage-Woche).
@@ -13,11 +12,11 @@ struct Window {
   int expect = -1;        // hochgerechneter Stand beim Reset in % (nur bei forecast 0), < 0 = unbekannt
 };
 
-// Tagesverlauf eines Fensters.
-struct Series {
-  int64_t day = 0;        // Unix-Sekunden des lokalen Tagesbeginns, 0 = noch nichts empfangen
-  int8_t v[HIST_N] = {};  // 0..100, -1 = keine Daten
-  uint32_t rev = 0;       // wird bei jedem Empfang erhöht
+// Session-Zeile auf Seite 0: die wartende (Vorrang) bzw. arbeitende Session.
+struct SessionLine {
+  char st = 0;         // a wartet, w arbeitet, i alle idle, 0 = keine Angabe
+  char name[41] = "";  // Titel (ASCII)
+  uint8_t more = 0;    // weitere aktive Sessions
 };
 
 struct ListItem {
@@ -47,7 +46,7 @@ struct ViewModel {
   const char *err = "";   // Fehlermeldung des Hosts, leer = alles gut
   const char *dots = "";  // ein Zeichen je laufender Session (w/a/i), '|' trennt lokal/Remote
   uint32_t offlineSecs = 0;
-  Series hist[2];       // 0 Session, 1 Woche
+  SessionLine sess;     // Session-Zeile auf Seite 0
   SessionList list[2];  // Seite 1 (Lokal), Seite 2 (Remote)
 };
 

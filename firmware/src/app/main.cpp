@@ -1,4 +1,4 @@
-// Claude-Usage-Display: empfängt Usage-Stand, Tagesverlauf und Session-Listen als
+// Claude-Usage-Display: empfängt Usage-Stand, Session-Status und Session-Listen als
 // NDJSON über USB-Serial (115200 Baud) und zeigt sie an. Tippen wechselt die Seite.
 // Protokoll: siehe README.md, Abschnitt "Protokoll".
 
@@ -7,7 +7,7 @@
 
 #include "ui.h"
 
-static const char *FW_VERSION = "2.3.0";
+static const char *FW_VERSION = "2.4.0";
 static const uint32_t OFFLINE_AFTER_MS = 90000;
 static const uint32_t FRAME_MS = 40;            // Bildaufbau (Dot-Animation braucht < 300 ms)
 static const uint32_t TAP_GAP_MS = 300;         // Entprellung: so lange vorher keine Berührung
@@ -89,24 +89,19 @@ static void handleState(const JsonDocument &doc) {
   }
   dots[n] = 0;
 
+  // Session-Zeile: x = {s: a|w|i, n: Titel, m: weitere aktive}; fehlt x, bleibt die Zeile leer.
+  JsonVariantConst x = doc["x"];
+  const char st = (x["s"] | "")[0];
+  vm.sess.st = st && strchr("awi", st) ? st : 0;
+  copyAscii(vm.sess.name, x["n"] | "", sizeof vm.sess.name);
+  vm.sess.more = (uint8_t)constrain((int)(x["m"] | 0), 0, 99);
+
   haveData = true;
   lastRxMs = millis();
   Serial.printf("{\"t\":\"ack\",\"s\":%.1f,\"w\":%.1f,\"b\":%u,\"l\":%u}\n", vm.session.pct,
                 vm.week.pct, targetBrightness(), ldr);
 }
 
-static void handleHist(const JsonDocument &doc) {
-  const char *k = doc["k"] | "";
-  Series *s = !strcmp(k, "s") ? &vm.hist[0] : !strcmp(k, "w") ? &vm.hist[1] : nullptr;
-  if (!s) return;
-  s->day = readNum(doc["day"], 0);
-  JsonArrayConst v = doc["v"];
-  for (int i = 0; i < HIST_N; i++) {
-    int64_t x = readNum(v[i], -1);
-    s->v[i] = x < 0 ? -1 : x > 100 ? 100 : (int8_t)x;
-  }
-  s->rev++;
-}
 
 static void handleList(const JsonDocument &doc) {
   int p = doc["p"] | 0;
@@ -133,8 +128,6 @@ static void handleLine(const char *s) {
   const char *t = doc["t"] | "";
   if (!strcmp(t, "state")) {
     handleState(doc);
-  } else if (!strcmp(t, "hist")) {
-    handleHist(doc);
   } else if (!strcmp(t, "list")) {
     handleList(doc);
 #ifdef SCREENSHOT
