@@ -265,7 +265,8 @@ internally. It briefly starts the Claude CLI in headless mode
   running sessions are idle it says "alle Sessions idle"; without running sessions it is empty.
 - **Dots:** local sessions on the left, connected remote sessions after the separator.
   Pulsing green = working, fast-blinking orange = waiting for you (permission or
-  question), gray = idle.
+  question; for remote sessions also a finished turn that claude.ai files under "needs
+  input"), gray = idle.
 
 **Pages 1 (Local, "Lokal") and 2 (Remote):** the last 7 sessions with a status dot (colors
 as above, hollow ring = offline/ended), title and age of the last activity ("5 min",

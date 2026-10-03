@@ -332,7 +332,12 @@ function ConvertFrom-RemoteSessions([string]$Json, $LocalIds) {
     if ($LocalIds.Contains(($r.id -replace '^(cse|session)_', ''))) { continue }
     $a = [int64]0
     try { $a = [DateTimeOffset]::Parse($r.last_event_at, [Globalization.CultureInfo]::InvariantCulture).ToUnixTimeSeconds() } catch { }
-    $s = switch ($r.worker_status) { 'running' { 'w' } 'requires_action' { 'a' } default { 'i' } }
+    # Fertig mit Rückfrage an dich: worker_status idle, aber status_bucket blocked.
+    $s = switch ($r.worker_status) {
+      'running' { 'w' }
+      'requires_action' { 'a' }
+      default { if ($r.status_bucket -eq 'blocked') { 'a' } else { 'i' } }
+    }
     if ($r.connection_status -eq 'disconnected') { $s = 'o' }
     [pscustomobject]@{ n = [string]$r.title; s = $s; a = $a; Id = $r.id; Connected = $r.connection_status -eq 'connected' }
   }
