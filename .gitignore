@@ -12,3 +12,5 @@ firmware/.vscode/
 config.json
 latest.json
 history.json
+# Release-Ausgabe von tools/make-release.ps1
+dist/

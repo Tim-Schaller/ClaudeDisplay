@@ -37,7 +37,7 @@ Remote Control list     ─┘    PowerShell 7)
   claude.ai subscription (Pro, Max, Team or Enterprise). With an API key there are no
   usage limits and therefore nothing to show. Setups with only the standalone Claude Code
   CLI are not supported.
-- **For flashing:** [PlatformIO Core](https://platformio.org/install/cli), easiest through
+- **Only for building from source:** [PlatformIO Core](https://platformio.org/install/cli), easiest through
   the PlatformIO extension for VS Code or the official installer. Both put `pio` into
   `%USERPROFILE%\.platformio\penv\Scripts`, but **not** on the PATH. For the current
   PowerShell session this is enough:
@@ -53,11 +53,37 @@ Remote Control list     ─┘    PowerShell 7)
 | `host/claude-cli.ps1` | Finds the Claude CLI (used by `collector.ps1` and the install scripts) |
 | `host/install.ps1` | Sets up autostart (Task Scheduler, no admin) and signs in the CLI |
 | `host/uninstall.ps1` | Undoes everything |
+| `setup/` | Setup assistant for the release ZIP (`Setup.cmd`, `Setup.ps1`, `Uninstall.cmd`, `README.txt`) |
+| `tools/make-release.ps1` | Builds a release into `dist/`: all firmware images (checked for local paths) and the setup ZIP |
 
-## Quick start with the prebuilt release
+## Quick start (plug & play)
 
-No PlatformIO needed. From the [latest release](https://github.com/Tim-Schaller/ClaudeDisplay/releases/latest)
-download the source code ZIP and the firmware image for your board:
+1. Download **`ClaudeDisplay-Setup-vX.Y.Z.zip`** from the
+   [latest release](https://github.com/Tim-Schaller/ClaudeDisplay/releases/latest) and unpack it
+   to a folder you keep (e.g. `Documents\ClaudeDisplay`).
+2. Plug the CYD into your PC with a USB **data** cable.
+3. Double-click **`Setup.cmd`** and follow the prompts (if Windows asks, choose
+   "More info" → "Run anyway").
+
+The setup assistant
+
+- checks Claude Desktop and PowerShell 7 (and offers to install PowerShell 7 from the
+  Microsoft Store, no admin rights needed),
+- finds the board (CH340, CH9102 or CP2102),
+- downloads Espressif's official esptool (pinned version, SHA256-checked) for the duration
+  of the setup,
+- optionally backs up the board's original firmware into the `backup` folder,
+- flashes the display firmware and asks whether the screen looks right; if not, it
+  flashes the other panel variant (ST7789 / ILI9341),
+- installs the background service, including the one-time browser login to Claude.
+
+Afterwards the display shows your usage within a few seconds. To remove the background
+service later, double-click `Uninstall.cmd`.
+
+**Without the assistant:** the release also contains the firmware images on their own.
+Each contains bootloader, partition table and app and is written to address `0x0`, e.g.
+with the [Espressif web flasher](https://espressif.github.io/esptool-js/) in Chrome/Edge or
+with `py -m esptool --chip esp32 --port COMx --baud 460800 write_flash 0x0 <file>`:
 
 | Image | For |
 |---|---|
@@ -65,20 +91,10 @@ download the source code ZIP and the firmware image for your board:
 | `claude-display-ili9341-vX.Y.Z.bin` | Original revision (ILI9341 panel) |
 | `test-st7789-vX.Y.Z.bin`, `test-ili9341-vX.Y.Z.bin` | Test image to find out which panel you have (see setup step 2) |
 
-Each image contains bootloader, partition table and app and is written to address `0x0`:
-
-- **In the browser** (Chrome or Edge): open the [Espressif web flasher](https://espressif.github.io/esptool-js/),
-  connect at 460800 baud, add the file at flash address `0x0` and click "Program".
-- **Or with esptool:** `py -m pip install esptool`, then
-  `py -m esptool --chip esp32 --port COMx --baud 460800 write_flash 0x0 claude-display-st7789-vX.Y.Z.bin`.
-
-Flashing overwrites the demo program that came with the board; to keep it, back it up first
-(setup step 1; with plain esptool: `py -m esptool --chip esp32 --port COMx --baud 460800 read_flash 0 ALL original-firmware.bin`).
-Then continue with setup step 4 (install the host part) from the unpacked source code ZIP.
-If the image looks wrong (inverted colors, swapped red/blue, rotated), build the firmware
-yourself with the build flags from setup step 2.
-
-## Setup
+Then install the host part as in setup step 4. If the image looks wrong (inverted colors,
+swapped red/blue, rotated), build the firmware yourself with the build flags from setup
+step 2.
+## Setup (manual / from source)
 
 Run all commands in PowerShell 7 from the project folder (root of this repo); `-d firmware`
 tells PlatformIO where the firmware project is. If you downloaded the repo as a ZIP,
@@ -335,7 +351,7 @@ Max. 7 entries, newest first. `n` = title (max. 40 characters), `s` = `w` workin
 
 | Message | When |
 |---|---|
-| `{"t":"hello","fw":"2.2.0"}` | After start-up. The host immediately sends `state`, both `hist` and both `list` |
+| `{"t":"hello","fw":"2.3.0"}` | After start-up. The host immediately sends `state`, both `hist` and both `list` |
 | `{"t":"ack","s":17.0,"w":24.0,"b":255,"l":0}` | After every `state`: the accepted values, target brightness `b` (0–255), raw light sensor value `l` |
 
 **Timing:** usage every 120 s, local sessions every 2 s, remote list every 30 s, lock
