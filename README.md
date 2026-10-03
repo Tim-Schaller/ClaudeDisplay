@@ -18,6 +18,12 @@ Remote Control list     ─┘    PowerShell 7)
   60 s without a tap. Brightness follows the light sensor; the backlight turns off while
   Windows is locked.
 
+> **Made for the Claude Desktop app on Windows (Code tab).** This project is not meant
+> for setups that only use the Claude Code CLI in a terminal; for those, Claude Code's
+> built-in [status line](https://code.claude.com/docs/en/statusline) is the better fit.
+> In the background the collector uses the CLI that ships with Claude Desktop; you don't
+> install or use the CLI yourself.
+
 > The texts on the display and in the log are in German. This README quotes them as they
 > appear, with the English meaning next to them.
 
@@ -27,9 +33,10 @@ Remote Control list     ─┘    PowerShell 7)
   dual-USB revision (micro-USB + USB-C, ST7789 panel); the original revision with an
   ILI9341 panel has its own build env. USB serial chip CH340, CH9102 or CP2102.
 - **PC:** Windows 10/11 with [PowerShell 7.5+](https://aka.ms/powershell). No admin rights needed.
-- **Claude:** Claude Desktop (Code tab) or the Claude Code CLI, signed in with a claude.ai
-  subscription (Pro, Max, Team or Enterprise). With an API key there are no usage limits
-  and therefore nothing to show.
+- **Claude:** the Claude Desktop app for Windows with the Code tab, signed in with a
+  claude.ai subscription (Pro, Max, Team or Enterprise). With an API key there are no
+  usage limits and therefore nothing to show. Setups with only the standalone Claude Code
+  CLI are not supported.
 - **For flashing:** [PlatformIO Core](https://platformio.org/install/cli), easiest through
   the PlatformIO extension for VS Code or the official installer. Both put `pio` into
   `%USERPROFILE%\.platformio\penv\Scripts`, but **not** on the PATH. For the current
@@ -112,8 +119,9 @@ The script
 1. copies `collector.ps1` and `claude-cli.ps1` to `%USERPROFILE%\.usage-display\`,
 2. creates the task **"Claude Usage Display"**. It starts at logon via
    `conhost --headless`, so without a visible window,
-3. signs in the Claude CLI if it is not signed in yet (`claude auth login`, a one-time
-   browser login with your Claude account),
+3. signs in the Claude Code CLI bundled with Claude Desktop if it is not signed in yet
+   (`claude auth login`, a one-time browser login with your Claude account). The collector
+   uses this CLI in the background; its login is separate from the desktop app's own login,
 4. starts the collector.
 
 Optional parameters, e.g. your own page titles (max. 14 characters) such as the name of the
@@ -155,17 +163,18 @@ internally. It briefly starts the Claude CLI in headless mode
 - The CLI handles sign-in and token refresh itself (`~\.claude\.credentials.json`).
 - A token from `claude setup-token` is **not** enough: it only has the `user:inference`
   scope, and fetching usage needs `user:profile`.
-- The CLI is looked up in this order: a standalone install at
-  `%USERPROFILE%\.local\bin\claude.exe`, then the newest version bundled with Claude
-  Desktop (`%APPDATA%\Claude\claude-code\<version>\…\claude.exe`; for the MSIX version of
-  the app, outside the app at `%LOCALAPPDATA%\Packages\Claude_*\LocalCache\Roaming\Claude\claude-code\…`),
-  then WinGet (`%LOCALAPPDATA%\Microsoft\WinGet\Links\claude.exe`) and finally
-  `claude.exe` on the PATH. A `CLAUDE_CONFIG_DIR` setting is respected.
+- The collector uses the newest CLI version bundled with Claude Desktop
+  (`%APPDATA%\Claude\claude-code\<version>\…\claude.exe`; for the MSIX version of the app,
+  outside the app at `%LOCALAPPDATA%\Packages\Claude_*\LocalCache\Roaming\Claude\claude-code\…`).
+  If a standalone CLI happens to be installed at `%USERPROFILE%\.local\bin\claude.exe`,
+  that one is preferred. Without a bundled CLI the collector would also try WinGet and
+  the PATH, but that is a fallback, not a supported setup.
+  A `CLAUDE_CONFIG_DIR` setting is respected.
 - `get_usage` is an internal interface marked as experimental. If Anthropic changes it,
   the display shows the collector's error message in the footer.
 
 **Session status:**
-- **Local (page 1):** every running Claude Code session (desktop app and terminal) keeps
+- **Local (page 1):** every running Claude Code session of the desktop app (and any CLI session in a terminal, if you also use one) keeps
   `~\.claude\sessions\<pid>.json` up to date with `busy` / `waiting` / `idle`. The
   collector only reads these `.json` files (never the `.key` files) and checks PID and
   start time. Title and last activity of desktop sessions come from their session files
@@ -234,7 +243,7 @@ e.g. "1 arbeitet, 4 idle" (1 working, 4 idle).
 | Symptom | Cause / fix |
 |---|---|
 | Footer "Nicht angemeldet: claude auth login" (not signed in) | Run `install.ps1` again; it starts the login |
-| Footer "Claude-CLI nicht gefunden" (CLI not found) | Is Claude Desktop installed? See the lookup order above. Alternatively install the CLI on its own |
+| Footer "Claude-CLI nicht gefunden" (CLI not found) | Is Claude Desktop installed and has its Code tab been opened at least once? The desktop app downloads its bundled CLI there |
 | "Warte auf Daten" stays on screen | Is the task running? `Get-ScheduledTask 'Claude Usage Display'`; also check `collector.log` |
 | Log: "Port COMx nicht verfuegbar: Access … denied" (port not available) | Another program holds the port (serial monitor, PlatformIO upload, a second collector). The collector retries every 3 s |
 | Display is not found | Device Manager: does "USB-SERIAL CH340 (COMx)" or "CP210x (COMx)" show up? If not, install the chip's driver (WCH CH341SER or Silicon Labs CP210x). Charge-only cable? |
