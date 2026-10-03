@@ -1,60 +1,64 @@
 # Claude-Usage-Display
 
-Zeigt den Claude-Verbrauch (5-Stunden-Session und 7-Tage-Woche) und den Status der
-laufenden Claude-Code-Sessions auf einem ESP32-2432S028 "Cheap Yellow Display" (CYD) an.
-Verbindung nur über USB-Serial, kein WLAN, kein Token auf dem Gerät.
+Shows your Claude usage (5-hour session and 7-day week) and the status of your running
+Claude Code sessions on an ESP32-2432S028 "Cheap Yellow Display" (CYD).
+USB serial only: no Wi-Fi, no token on the device.
 
 ```
-Claude-CLI (get_usage)  ─┐
-~\.claude\sessions       ├─► collector.ps1 ──► USB-Serial, NDJSON ──► CYD-Firmware
-Desktop-Session-Dateien  │   (Taskplaner,         115200 Baud          3 Seiten, Touch
-Remote-Control-Liste    ─┘    PowerShell 7)
+Claude CLI (get_usage)  ─┐
+~\.claude\sessions       ├─► collector.ps1 ──► USB serial, NDJSON ──► CYD firmware
+Desktop session files    │   (Task Scheduler,     115200 baud          3 pages, touch
+Remote Control list     ─┘    PowerShell 7)
 ```
 
-- **Host:** `host/collector.ps1` fragt alle 2 Minuten den Verbrauch ab, liest alle 2 s den
-  Status der lokalen Sessions und alle 30 s die Remote-Control-Sessions anderer Rechner.
-  Er führt einen Verlauf für Kurve und Prognose und schickt alles ans Display.
-- **Display:** drei Seiten, Tippen schaltet weiter (Home → Remote → Lokal), nach 60 s
-  ohne Tippen zurück auf Home. Helligkeit automatisch über den Lichtsensor, Backlight
-  aus, solange Windows gesperrt ist.
+- **Host:** `host/collector.ps1` fetches the usage every 2 minutes, reads the state of the
+  local sessions every 2 s and the Remote Control sessions of other machines every 30 s.
+  It keeps a history for the chart and the forecast and sends everything to the display.
+- **Display:** three pages, tap to switch (Home → Remote → Local), back to Home after
+  60 s without a tap. Brightness follows the light sensor; the backlight turns off while
+  Windows is locked.
 
-## Voraussetzungen
+> The texts on the display and in the log are in German. This README quotes them as they
+> appear, with the English meaning next to them.
 
-- **Board:** ESP32-2432S028 ("Cheap Yellow Display", 320×240, Touch). Getestet mit der
-  Dual-USB-Revision (Micro-USB + USB-C, ST7789-Panel); für die ursprüngliche Revision mit
-  ILI9341-Panel gibt es ein eigenes Build-Env. USB-Seriell-Chip CH340 oder CP2102.
-- **PC:** Windows 10/11 mit [PowerShell 7.5+](https://aka.ms/powershell). Keine Admin-Rechte nötig.
-- **Claude:** Claude Desktop (Code-Tab) oder Claude Code CLI, angemeldet mit einem
-  claude.ai-Abo (Pro, Max, Team oder Enterprise). Mit API-Key gibt es keine Usage-Limits
-  und damit nichts anzuzeigen.
-- **Zum Flashen:** [PlatformIO Core](https://platformio.org/install/cli), am einfachsten
-  über die PlatformIO-Erweiterung für VS Code oder den offiziellen Installer. Beide legen
-  `pio` unter `%USERPROFILE%\.platformio\penv\Scripts` ab, aber **nicht** im PATH. Für die
-  aktuelle PowerShell-Sitzung reicht:
-  `$env:PATH += ";$env:USERPROFILE\.platformio\penv\Scripts"`. Alternativ mit Python 3:
-  `py -m pip install --user platformio` und dann `py -m platformio` statt `pio`.
-## Inhalt
+## Requirements
 
-| Pfad | Zweck |
+- **Board:** ESP32-2432S028 ("Cheap Yellow Display", 320×240, touch). Tested with the
+  dual-USB revision (micro-USB + USB-C, ST7789 panel); the original revision with an
+  ILI9341 panel has its own build env. USB serial chip CH340, CH9102 or CP2102.
+- **PC:** Windows 10/11 with [PowerShell 7.5+](https://aka.ms/powershell). No admin rights needed.
+- **Claude:** Claude Desktop (Code tab) or the Claude Code CLI, signed in with a claude.ai
+  subscription (Pro, Max, Team or Enterprise). With an API key there are no usage limits
+  and therefore nothing to show.
+- **For flashing:** [PlatformIO Core](https://platformio.org/install/cli), easiest through
+  the PlatformIO extension for VS Code or the official installer. Both put `pio` into
+  `%USERPROFILE%\.platformio\penv\Scripts`, but **not** on the PATH. For the current
+  PowerShell session this is enough:
+  `$env:PATH += ";$env:USERPROFILE\.platformio\penv\Scripts"`. Alternatively with Python 3:
+  `py -m pip install --user platformio`, then use `py -m platformio` instead of `pio`.
+
+## Contents
+
+| Path | Purpose |
 |---|---|
-| `firmware/` | PlatformIO-Projekt: Envs `app` (ST7789) und `app-ili9341` = Anzeige, `test-st7789`/`test-ili9341` = Testbild |
-| `host/collector.ps1` | Dauerprozess: Abruf, Sessions, Verlauf (`history.json`), `latest.json`, Serial |
-| `host/claude-cli.ps1` | Findet die Claude-CLI (von `collector.ps1` und den Install-Scripts genutzt) |
-| `host/install.ps1` | Autostart einrichten (Taskplaner, ohne Admin) und CLI anmelden |
-| `host/uninstall.ps1` | Alles rückgängig machen |
+| `firmware/` | PlatformIO project: envs `app` (ST7789) and `app-ili9341` = display, `test-st7789`/`test-ili9341` = test image |
+| `host/collector.ps1` | Background process: usage, sessions, history (`history.json`), `latest.json`, serial |
+| `host/claude-cli.ps1` | Finds the Claude CLI (used by `collector.ps1` and the install scripts) |
+| `host/install.ps1` | Sets up autostart (Task Scheduler, no admin) and signs in the CLI |
+| `host/uninstall.ps1` | Undoes everything |
 
 ## Setup
 
-Alle Befehle im Projektordner (Wurzel dieses Repos) in PowerShell 7 ausführen; `-d firmware`
-sagt PlatformIO, wo das Firmware-Projekt liegt. Wurde das Repo als ZIP heruntergeladen,
-markiert Windows die Scripte als "aus dem Internet"; deshalb `-ExecutionPolicy Bypass` beim
-Aufruf.
+Run all commands in PowerShell 7 from the project folder (root of this repo); `-d firmware`
+tells PlatformIO where the firmware project is. If you downloaded the repo as a ZIP,
+Windows marks the scripts as "from the internet"; that is why the commands use
+`-ExecutionPolicy Bypass`.
 
-### 1. Original-Firmware sichern (empfohlen)
+### 1. Back up the original firmware (recommended)
 
-Das Board kommt mit einem Demo-Programm. Wer es später zurückhaben will, sichert vor dem
-ersten Flashen den kompletten Flash (4 MB, ca. 2 Minuten; `COMx` = Port des Boards im
-Gerätemanager). Der erste Build lädt die Werkzeuge (esptool) herunter:
+The board ships with a demo program. If you want it back later, back up the whole flash
+before flashing for the first time (4 MB, about 2 minutes; `COMx` = the board's port in
+Device Manager). The first build downloads the tools (esptool):
 
 ```powershell
 pio run -d firmware -e app; New-Item -ItemType Directory -Force firmware\backup | Out-Null
@@ -63,196 +67,202 @@ pio run -d firmware -e app; New-Item -ItemType Directory -Force firmware\backup 
 pio pkg exec -p tool-esptoolpy -- esptool.py --chip esp32 --port COMx --baud 460800 read_flash 0 ALL firmware\backup\original-firmware.bin
 ```
 
-`firmware/backup/` ist in `.gitignore` eingetragen und landet nicht im Repo.
+`firmware/backup/` is listed in `.gitignore` and never ends up in the repo.
 
-### 2. Panel-Typ bestimmen
+### 2. Determine the panel type
 
-Die CYD-Revisionen haben unterschiedliche Display-Controller. Das Testbild zeigt
-beschriftete Farbbalken; richtig ist die Variante mit schwarzem Hintergrund, passenden
-Farben und lesbarem Text ("<- oben links" steht oben links):
+The CYD revisions use different display controllers. The test image shows labelled color
+bars; the right variant has a black background, matching colors and readable text
+("<- oben links" = "top left" is in the top-left corner):
 
 ```powershell
 pio run -d firmware -e test-st7789 -t upload
 ```
 
-Stimmt es nicht, `test-ili9341` probieren. Passt dann immer noch etwas nicht, helfen
-Build-Flags, die genauso für die App gelten (vor dem Build setzen, für die App beibehalten):
+If it looks wrong, try `test-ili9341`. If something is still off, build flags help; they
+apply to the app in the same way (set them before building and keep them for the app):
 
 | Problem | Flag |
 |---|---|
-| Weißer Hintergrund, Farben negativ | `$env:PLATFORMIO_BUILD_FLAGS = "-DPANEL_INVERT=1"` |
-| Rot und Blau vertauscht | `$env:PLATFORMIO_BUILD_FLAGS = "-DPANEL_SWAP_RB=1"` |
-| Bild gedreht oder gespiegelt | `$env:PLATFORMIO_BUILD_FLAGS = "-DROTATION=3"` (0–3 gedreht, 4–7 gespiegelt; Standard 1) |
+| White background, negative colors | `$env:PLATFORMIO_BUILD_FLAGS = "-DPANEL_INVERT=1"` |
+| Red and blue swapped | `$env:PLATFORMIO_BUILD_FLAGS = "-DPANEL_SWAP_RB=1"` |
+| Image rotated or mirrored | `$env:PLATFORMIO_BUILD_FLAGS = "-DROTATION=3"` (0–3 rotated, 4–7 mirrored; default 1) |
 
-Mehrere Flags mit Leerzeichen kombinieren, z. B. `"-DPANEL_INVERT=1 -DROTATION=3"`.
+Combine several flags with spaces, e.g. `"-DPANEL_INVERT=1 -DROTATION=3"`.
 
-### 3. Firmware flashen
+### 3. Flash the firmware
 
 ```powershell
 pio run -d firmware -e app -t upload
 ```
 
-Für ILI9341-Boards `-e app-ili9341`. PlatformIO findet den Port selbst; bei mehreren
-seriellen Geräten `--upload-port COMx` anhängen. Läuft der Collector schon, hält er den
-Port belegt: vorher `Stop-ScheduledTask 'Claude Usage Display'`, danach
-`Start-ScheduledTask 'Claude Usage Display'`.
+For ILI9341 boards use `-e app-ili9341`. PlatformIO finds the port by itself; with several
+serial devices attached add `--upload-port COMx`. If the collector is already running it
+holds the port: run `Stop-ScheduledTask 'Claude Usage Display'` first and
+`Start-ScheduledTask 'Claude Usage Display'` afterwards.
 
-### 4. Host installieren (einmalig, ohne Admin-Rechte)
+### 4. Install the host part (once, no admin rights)
 
 ```powershell
 pwsh -NoProfile -ExecutionPolicy Bypass -File .\host\install.ps1
 ```
-Das Script
 
-1. kopiert `collector.ps1` und `claude-cli.ps1` nach `%USERPROFILE%\.usage-display\`,
-2. legt den Task **"Claude Usage Display"** an. Er startet bei der Anmeldung über
-   `conhost --headless`, also ohne sichtbares Fenster,
-3. meldet die Claude-CLI an, falls sie es noch nicht ist (`claude auth login`,
-   einmaliger Browser-Login mit dem Claude-Account),
-4. startet den Collector.
+The script
 
-Optionale Parameter, z. B. eigene Seitentitel (max. 14 Zeichen) wie der Name des Servers,
-auf dem die Remote-Sessions laufen:
+1. copies `collector.ps1` and `claude-cli.ps1` to `%USERPROFILE%\.usage-display\`,
+2. creates the task **"Claude Usage Display"**. It starts at logon via
+   `conhost --headless`, so without a visible window,
+3. signs in the Claude CLI if it is not signed in yet (`claude auth login`, a one-time
+   browser login with your Claude account),
+4. starts the collector.
+
+Optional parameters, e.g. your own page titles (max. 14 characters) such as the name of the
+server the remote sessions run on:
 
 ```powershell
-pwsh -NoProfile -ExecutionPolicy Bypass -File .\host\install.ps1 -RemoteLabel "mein-server" -LocalLabel "Laptop"
+pwsh -NoProfile -ExecutionPolicy Bypass -File .\host\install.ps1 -RemoteLabel "my-server" -LocalLabel "Laptop"
 ```
 
-| Parameter | Wirkung |
+| Parameter | Effect |
 |---|---|
-| `-RemoteLabel`, `-LocalLabel` | Titel von Seite 1 bzw. 2 (Standard "Remote" / "Lokal"); `""` stellt den Standard wieder her |
-| `-Port COMx` | Festen COM-Port verwenden statt automatischer Suche; `""` schaltet zurück auf automatisch |
-| `-NoLogin` | Keinen CLI-Login starten |
+| `-RemoteLabel`, `-LocalLabel` | Title of page 1 and 2 (default "Remote" / "Lokal"); `""` restores the default |
+| `-Port COMx` | Use a fixed COM port instead of searching; `""` switches back to automatic |
+| `-NoLogin` | Do not start the CLI login |
 
-Die Werte landen in `%USERPROFILE%\.usage-display\config.json` und bleiben bei späteren
-Installationen erhalten. Mehrfaches Ausführen ist unschädlich; so übernimmt man auch eine
-geänderte `collector.ps1`. Den Display-Port sucht der Collector automatisch (CH340, CH9102,
-CP2102) und nimmt nur einen Port, an dem das Board antwortet. Andere USB-Seriell-Geräte
-werden nach 6 s ohne Antwort für 10 Minuten übergangen.
+The values are stored in `%USERPROFILE%\.usage-display\config.json` and survive later
+installs. Running the script again is harmless; it is also how you apply a changed
+`collector.ps1`. The collector searches the display port automatically (CH340, CH9102,
+CP2102) and only uses a port on which the board answers. Other USB serial devices are
+skipped for 10 minutes after 6 s without an answer.
 
-### 5. Prüfen
+### 5. Check
 
-- Auf dem Display stehen nach etwa 5–10 s Werte, unten "Stand HH:MM".
+- After about 5–10 s the display shows values, with "Stand HH:MM" (= "as of HH:MM") at
+  the bottom.
 - Log: `%USERPROFILE%\.usage-display\collector.log`
-- Letzter Stand: `%USERPROFILE%\.usage-display\latest.json`
+- Latest values: `%USERPROFILE%\.usage-display\latest.json`
 
-## Woher kommen die Zahlen?
+## Where do the numbers come from?
 
-Die Desktop-App führt die Statusline von Claude Code **nicht** aus, die läuft nur
-in der Terminal-REPL. Der Collector nutzt deshalb denselben Weg wie die Desktop-App
-intern. Er startet die Claude-CLI kurz im Headless-Modus
-(`--print --input-format stream-json --output-format stream-json`), schickt den
-Control-Request `get_usage` und liest `rate_limits.five_hour` / `seven_day`
+The desktop app does **not** run Claude Code's status line; that only runs in the
+terminal REPL. The collector therefore takes the same route the desktop app uses
+internally. It briefly starts the Claude CLI in headless mode
+(`--print --input-format stream-json --output-format stream-json`), sends the
+`get_usage` control request and reads `rate_limits.five_hour` / `seven_day`
 (`utilization` 0–100 %, `resets_at`).
 
-- Das verbraucht **kein** Kontingent, weil keine Anfrage an das Modell geht.
-- Anmeldung und Token-Refresh macht die CLI selbst (`~\.claude\.credentials.json`).
-- Ein Token aus `claude setup-token` reicht **nicht**: Es hat nur den Scope
-  `user:inference`, für den Usage-Abruf ist `user:profile` nötig.
-- Gefunden wird die CLI in dieser Reihenfolge: eigenständige Installation unter
-  `%USERPROFILE%\.local\bin\claude.exe`, dann die neueste von Claude Desktop mitgebrachte
-  Version (`%APPDATA%\Claude\claude-code\<version>\…\claude.exe`, bei der MSIX-Variante der
-  App außerhalb der App unter `%LOCALAPPDATA%\Packages\Claude_*\LocalCache\Roaming\Claude\claude-code\…`),
-  dann WinGet (`%LOCALAPPDATA%\Microsoft\WinGet\Links\claude.exe`) und zuletzt `claude.exe`
-  im PATH. Ein gesetztes `CLAUDE_CONFIG_DIR` wird berücksichtigt.
-- `get_usage` ist eine interne, als experimentell markierte Schnittstelle. Ändert
-  Anthropic sie, zeigt das Display die Fehlermeldung des Collectors in der Fußzeile.
+- This uses **no** quota, because no request goes to the model.
+- The CLI handles sign-in and token refresh itself (`~\.claude\.credentials.json`).
+- A token from `claude setup-token` is **not** enough: it only has the `user:inference`
+  scope, and fetching usage needs `user:profile`.
+- The CLI is looked up in this order: a standalone install at
+  `%USERPROFILE%\.local\bin\claude.exe`, then the newest version bundled with Claude
+  Desktop (`%APPDATA%\Claude\claude-code\<version>\…\claude.exe`; for the MSIX version of
+  the app, outside the app at `%LOCALAPPDATA%\Packages\Claude_*\LocalCache\Roaming\Claude\claude-code\…`),
+  then WinGet (`%LOCALAPPDATA%\Microsoft\WinGet\Links\claude.exe`) and finally
+  `claude.exe` on the PATH. A `CLAUDE_CONFIG_DIR` setting is respected.
+- `get_usage` is an internal interface marked as experimental. If Anthropic changes it,
+  the display shows the collector's error message in the footer.
 
-**Session-Status:**
-- **Lokal (Seite 2):** Jede laufende Claude-Code-Session (Desktop-App und Terminal) pflegt
-  `~\.claude\sessions\<pid>.json` mit `busy` / `waiting` / `idle`. Der Collector liest nur
-  diese `.json`-Dateien (nie die `.key`-Dateien) und prüft PID und Startzeit. Titel und
-  letzte Aktivität der Desktop-Sessions kommen aus deren Session-Dateien
-  (`…\Claude\claude-code-sessions`). Normale Chats aus dem Chat-Tab sind lokal nicht
-  lesbar und werden nicht angezeigt.
-- **Remote (Seite 1):** Sessions auf anderen Rechnern (z. B. einem Server, auf dem Claude
-  Code im Terminal läuft) erscheinen, wenn dort **Remote Control** aktiv ist
-  (`/config` → "Enable Remote Control for all sessions" oder `claude --remote-control`).
-  Dann meldet sich jede Session bei Anthropic an, und der Collector holt die Liste über
-  `GET https://api.anthropic.com/v1/code/sessions`, ohne Netzverbindung zum anderen Rechner.
-  Dafür **liest** er das Access-Token der CLI aus `.credentials.json`: nur lesend, nie
-  geloggt, nie erneuert (das macht die CLI bei den `get_usage`-Läufen) und nie an das
-  Display gesendet. Genau genommen zeigt Seite 1 alle nicht archivierten Sessions dieser
-  Liste, die keiner Session auf diesem Rechner zugeordnet werden können, auch beendete
-  (leerer Ring). Wer Remote Control nirgends nutzt, sieht dort meist nur ältere eigene
-  Sessions. Die Schnittstelle ist intern und undokumentiert; fällt sie aus, zeigt Seite 1
-  einen Fehler, der Rest läuft weiter.
-- Angezeigt werden nur Titel, Status und Zeit, nie Chat-Inhalte.
+**Session status:**
+- **Local (page 2):** every running Claude Code session (desktop app and terminal) keeps
+  `~\.claude\sessions\<pid>.json` up to date with `busy` / `waiting` / `idle`. The
+  collector only reads these `.json` files (never the `.key` files) and checks PID and
+  start time. Title and last activity of desktop sessions come from their session files
+  (`…\Claude\claude-code-sessions`). Regular chats from the Chat tab cannot be read
+  locally and are not shown.
+- **Remote (page 1):** sessions on other machines (e.g. a server running Claude Code in a
+  terminal) appear when **Remote Control** is enabled there (`/config` → "Enable Remote
+  Control for all sessions", or `claude --remote-control`). Each session then registers
+  with Anthropic, and the collector fetches the list from
+  `GET https://api.anthropic.com/v1/code/sessions`, without any network connection to the
+  other machine. To do so it **reads** the CLI's access token from `.credentials.json`:
+  read-only, never logged, never refreshed (the CLI does that during the `get_usage` runs)
+  and never sent to the display. Strictly speaking, page 1 shows all non-archived sessions
+  from that list that cannot be matched to a session on this machine, including ended
+  ones (hollow ring). If you don't use Remote Control anywhere, you will mostly see older
+  sessions of your own there. The interface is internal and undocumented; if it breaks,
+  page 1 shows an error and everything else keeps working.
+- Only titles, status and times are shown, never chat content.
 
-## Anzeige
+## Display
 
-**Seite 0: Home**
+**Page 0: Home**
 
 ```
 ┌────────────────────────────────────────┐
-│ Claude Usage      ● ○ ○       ● 11:36  │  Seitenpunkte, ● grün = Daten aktuell
+│ Claude Usage      ● ○ ○       ● 11:36  │  page dots, green ● = data is current
 │   ╭──────╮            ╭──────╮         │
-│  │  17 %  │          │  24 %  │        │  Ring: grün bis 50 %,
-│  │Session │          │ Woche  │        │  gelb um 80 %, rot ab 95 %
+│  │  17 %  │          │  24 %  │        │  ring: green up to 50 %,
+│  │Session │          │ Woche  │        │  yellow around 80 %, red from 95 %
 │ Reset 3 h 14 min      Reset 3 T 2 h    │
-│ Limit ca. 13:40     ca. 38 % bis Reset │  Prognose
-│ ▁▂▃▅▂▁▂▃▅  |          ▁▁▂▂▃▃  |        │  Verlauf heute (0–24 Uhr), | = jetzt
-│ ● ● | ● ● ●                Stand 11:35 │  Dots: eine pro laufender Session
+│ Limit ca. 13:40     ca. 38 % bis Reset │  forecast
+│ ▁▂▃▅▂▁▂▃▅  |          ▁▁▂▂▃▃  |        │  today's history (0–24 h), | = now
+│ ● ● | ● ● ●                Stand 11:35 │  dots: one per running session
 └────────────────────────────────────────┘
 ```
 
-- **Prognose:** „Limit ca. HH:MM“ (orange), wenn das Limit beim Durchschnittstempo seit
-  Fensterbeginn (Reset minus 5 h bzw. 7 Tage, dort 0 %) vor dem Reset erreicht wird,
-  sonst „ca. XX % bis Reset“ (hochgerechneter Stand beim Reset, eingefärbt wie die Gauges).
-  Beispiel: 20 % nach 2,6 h → 7,7 %/h → beim Reset ca. 38 %. Sie erscheint erst 30 min
-  (Session) bzw. 12 h (Woche) nach Fensterbeginn, vorher wäre sie zu sprunghaft.
-- **Verlauf:** Tageskurve in 15-min-Schritten, gespeichert in `history.json` (8 Tage).
-- **Dots:** links die lokalen Sessions, nach dem Trennstrich die verbundenen
-  Remote-Sessions. Grün pulsierend = arbeitet, orange schnell blinkend = wartet auf dich
-  (Freigabe oder Frage), grau = idle.
+"Woche" = week, "T" = days ("Tage").
 
-**Seiten 1 (Remote) und 2 (Lokal):** die letzten 7 Sessions mit Status-Punkt (Farben wie
-oben, leerer Ring = offline/beendet), Titel und Alter der letzten Aktivität („5 min“,
-„3 h“, „2 T“; bei wartenden Sessions „wartet“). Unten die Zusammenfassung, z. B.
-„1 arbeitet, 4 idle“.
+- **Forecast:** "Limit ca. HH:MM" (= limit reached around HH:MM, orange) if, at the average
+  pace since the window started (reset minus 5 h or 7 days, starting at 0 %), the limit
+  is reached before the reset; otherwise "ca. XX % bis Reset" (= about XX % at reset: the
+  projected value at reset, colored like the gauges). Example: 20 % after 2.6 h →
+  7.7 %/h → about 38 % at reset. It only appears 30 min (session) or 12 h (week) after
+  the window started; before that it would be too jumpy.
+- **History:** today's curve in 15-minute steps, stored in `history.json` (8 days).
+- **Dots:** local sessions on the left, connected remote sessions after the separator.
+  Pulsing green = working, fast-blinking orange = waiting for you (permission or
+  question), gray = idle.
 
-- **Warte auf Daten:** Das Display hat seit dem Start noch nichts vom Host bekommen.
-- **Offline:** Seit 90 s keine Nachricht vom Host. Unten stehen die zuletzt bekannten Werte.
-- **`--`:** Wert unbekannt, z. B. vor dem ersten erfolgreichen Abruf.
-- **Helligkeit:** Der Lichtsensor unterscheidet nur hell/dunkel (bei Tageslicht ist er
-  gesättigt). Ist es 10 s lang dunkel, dimmt das Display auf ca. 10 %; wird es 10 s lang
-  hell, geht es auf 100 %. Solange Windows gesperrt ist, ist das Backlight aus.
+**Pages 1 (Remote) and 2 (Local, "Lokal"):** the last 7 sessions with a status dot (colors
+as above, hollow ring = offline/ended), title and age of the last activity ("5 min",
+"3 h", "2 T" = 2 days; for waiting sessions "wartet" = waiting). At the bottom a summary,
+e.g. "1 arbeitet, 4 idle" (1 working, 4 idle).
+
+- **"Warte auf Daten"** (waiting for data): the display has not received anything from
+  the host since it started.
+- **"Offline":** no message from the host for 90 s. The last known values are shown at
+  the bottom.
+- **`--`:** value unknown, e.g. before the first successful fetch.
+- **Brightness:** the light sensor only distinguishes bright from dark (it saturates in
+  daylight). After 10 s of darkness the display dims to about 10 %; after 10 s of light
+  it returns to 100 %. While Windows is locked the backlight is off.
 
 ## Troubleshooting
 
-| Symptom | Ursache / Abhilfe |
+| Symptom | Cause / fix |
 |---|---|
-| Fußzeile "Nicht angemeldet: claude auth login" | `install.ps1` erneut ausführen, das startet den Login |
-| Fußzeile "Claude-CLI nicht gefunden" | Claude Desktop installiert? Pfad siehe oben. Alternativ die CLI eigenständig installieren |
-| "Warte auf Daten" bleibt stehen | Läuft der Task? `Get-ScheduledTask 'Claude Usage Display'`, außerdem `collector.log` prüfen |
-| Log: "Port COMx nicht verfuegbar: Access … denied" | Ein anderes Programm hält den Port (serieller Monitor, PlatformIO-Upload, zweiter Collector). Der Collector versucht es alle 3 s erneut |
-| Display wird nicht gefunden | Gerätemanager: Erscheint "USB-SERIAL CH340 (COMx)" bzw. "CP210x (COMx)"? Sonst den Treiber des Chips installieren (WCH CH341SER bzw. Silicon Labs CP210x). Reines Ladekabel? |
-| Board startet beim Öffnen des Ports neu | Kommt vereinzelt vor (DTR/RTS-Auto-Reset-Schaltung). Harmlos: Das Board meldet `hello`, der Collector schickt sofort den Stand |
-| Farben falsch oder Bild gespiegelt | Panel-Typ und Build-Flags (`PANEL_INVERT`, `PANEL_SWAP_RB`, `ROTATION`) prüfen, siehe Setup Schritt 2 |
-| Log: "Kein Display an COMx (keine Antwort)" | An dem Port hängt ein anderes USB-Seriell-Gerät, oder das Board läuft noch nicht mit dieser Firmware. Firmware flashen bzw. `install.ps1 -Port COMx` setzen |
-| Weißer Bildschirm | SPI-Takt zu hoch. Er steht in `lgfx_cyd.h` auf 27 MHz, über ca. 32 MHz scheitert die Panel-Initialisierung bei manchen Boards |
-| PlatformIO-Install scheitert mit `CERTIFICATE_VERIFY_FAILED` | Ein Proxy mit TLS-Inspection (typisch in Firmennetzen) bricht die Verbindung auf. Außerhalb installieren oder `REQUESTS_CA_BUNDLE` auf das Firmen-Zertifikat setzen |
-| Zahlen weichen kurz von claude.ai ab | Der Abruf läuft alle 2 Minuten, maßgeblich ist "Stand HH:MM" |
-| Seite Remote: "Kein CLI-Login" / "Liste: Login abgelaufen" | CLI-Login fehlt oder ist abgelaufen: `install.ps1` erneut ausführen |
-| Seite Remote: "Liste nicht abrufbar" | Netz weg oder die interne Schnittstelle hat sich geändert. Die letzte Liste bleibt stehen |
-| Seite Remote bleibt leer | Auf dem anderen Rechner ist Remote Control nicht aktiv, oder er nutzt einen anderen Claude-Account |
-| Display bleibt dunkel, obwohl entsperrt | Gesperrt gilt, solange `LogonUI.exe` läuft. Nach dem Entsperren kommt der nächste Stand binnen 2 s |
-| Display dimmt nicht / dimmt bei Tag | Die Schwellen stehen in `firmware/src/app/main.cpp` (`LDR_DARK`, `LDR_BRIGHT`). Wechsel stehen im Log als "Display-Helligkeit … (LDR …)". Ein Gehäuse darf den Sensor nicht abdecken |
+| Footer "Nicht angemeldet: claude auth login" (not signed in) | Run `install.ps1` again; it starts the login |
+| Footer "Claude-CLI nicht gefunden" (CLI not found) | Is Claude Desktop installed? See the lookup order above. Alternatively install the CLI on its own |
+| "Warte auf Daten" stays on screen | Is the task running? `Get-ScheduledTask 'Claude Usage Display'`; also check `collector.log` |
+| Log: "Port COMx nicht verfuegbar: Access … denied" (port not available) | Another program holds the port (serial monitor, PlatformIO upload, a second collector). The collector retries every 3 s |
+| Display is not found | Device Manager: does "USB-SERIAL CH340 (COMx)" or "CP210x (COMx)" show up? If not, install the chip's driver (WCH CH341SER or Silicon Labs CP210x). Charge-only cable? |
+| Board restarts when the port is opened | Happens occasionally (DTR/RTS auto-reset circuit). Harmless: the board sends `hello` and the collector immediately sends the current state |
+| Wrong colors or mirrored image | Check panel type and build flags (`PANEL_INVERT`, `PANEL_SWAP_RB`, `ROTATION`), see setup step 2 |
+| Log: "Kein Display an COMx (keine Antwort)" (no display, no answer) | Another USB serial device is on that port, or the board does not run this firmware yet. Flash the firmware or set `install.ps1 -Port COMx` |
+| White screen | SPI clock too high. It is set to 27 MHz in `lgfx_cyd.h`; above about 32 MHz the panel initialisation fails on some boards |
+| PlatformIO install fails with `CERTIFICATE_VERIFY_FAILED` | A proxy with TLS inspection (common in corporate networks) intercepts the connection. Install outside that network or point `REQUESTS_CA_BUNDLE` to the corporate certificate |
+| Numbers differ briefly from claude.ai | The fetch runs every 2 minutes; "Stand HH:MM" tells you how current they are |
+| Remote page: "Kein CLI-Login" / "Liste: Login abgelaufen" (no CLI login / login expired) | The CLI login is missing or expired: run `install.ps1` again |
+| Remote page: "Liste nicht abrufbar" (list not available) | No network, or the internal interface has changed. The last list stays on screen |
+| Remote page stays empty | Remote Control is not enabled on the other machine, or it uses a different Claude account |
+| Display stays dark although unlocked | "Locked" means `LogonUI.exe` is running. After unlocking, the next update arrives within 2 s |
+| Display does not dim / dims in daylight | The thresholds are in `firmware/src/app/main.cpp` (`LDR_DARK`, `LDR_BRIGHT`). Changes appear in the log as "Display-Helligkeit … (LDR …)". A case must not cover the sensor |
 
-Das Log ist knapp gehalten: Start, Verbindung, Trennung, geänderte Werte, Fehler.
-Wiederholte gleiche Fehler stehen nur einmal drin. Ab 1 MB wird es nach
-`collector.log.1` rotiert.
+The log is kept short: start, connect, disconnect, changed values, errors. Repeated
+identical errors are logged only once. At 1 MB it is rotated to `collector.log.1`.
 
-## Protokoll
+## Protocol
 
-Eine JSON-Nachricht pro Zeile (UTF-8, `\n`), 115200 Baud, 8N1. Zeilen, die nicht
-mit `{` beginnen, ignorieren beide Seiten (z. B. Boot-Meldungen des ESP32).
-Zeilen über 1023 Byte verwirft das Board komplett. Texte sind ASCII (Umlaute
-transliteriert), weil die Schriften nichts anderes kennen.
+One JSON message per line (UTF-8, `\n`), 115200 baud, 8N1. Both sides ignore lines that
+do not start with `{` (e.g. ESP32 boot messages). The board drops lines longer than
+1023 bytes entirely. Texts are ASCII (umlauts transliterated), because the fonts know
+nothing else.
 
-**Host → Display**
+**Host → display**
 
-`state`: bei jeder Änderung, nach `hello` und alle 30 s.
+`state`: on every change, after `hello`, and every 30 s.
 
 ```json
 {"t":"state","now":1790975844,"tz":120,
@@ -260,93 +270,91 @@ transliteriert), weil die Schriften nichts anderes kennen.
  "at":1790975800,"lock":0,"d":"w|iiii"}
 ```
 
-| Feld | Bedeutung |
+| Field | Meaning |
 |---|---|
-| `now` | Aktuelle Zeit, Unix-Sekunden (UTC). Das Board führt damit seine Uhr |
-| `tz` | Lokaler UTC-Offset in Minuten inkl. Sommerzeit |
-| `s`, `w` | Session (5 h) und Woche (7 d): `p` = verbraucht in %, `r` = Reset (Unix-s), `f` = Prognose: Zeitpunkt, an dem 100 % erreicht werden, `0` = nicht vor dem Reset (dann `e` = hochgerechneter Stand beim Reset in %), fehlt = noch keine Prognose. Fehlt das Objekt, ist der Wert unbekannt |
-| `at` | Zeitpunkt des letzten erfolgreichen Abrufs (fehlt, solange es keinen gab) |
-| `err` | Kurzer Fehlertext für die Fußzeile (ASCII, max. 44 Zeichen). Fehlt, wenn alles gut ist |
-| `lock` | `1` = Windows gesperrt → Backlight aus (gilt auch im Offline-Fall weiter) |
-| `d` | Dots: ein Zeichen je laufender Session, `w` arbeitet, `a` wartet, `i` idle; erst lokal, dann `\|`, dann Remote (max. 24) |
+| `now` | Current time, Unix seconds (UTC). The board keeps its clock with it |
+| `tz` | Local UTC offset in minutes, including daylight saving time |
+| `s`, `w` | Session (5 h) and week (7 d): `p` = used in %, `r` = reset (Unix s), `f` = forecast: time at which 100 % is reached, `0` = not before the reset (then `e` = projected value at reset in %), missing = no forecast yet. If the object is missing, the value is unknown |
+| `at` | Time of the last successful fetch (missing until there is one) |
+| `err` | Short error text for the footer (ASCII, max. 44 characters). Missing when all is well |
+| `lock` | `1` = Windows locked → backlight off (also stays in effect while offline) |
+| `d` | Dots: one character per running session, `w` working, `a` waiting, `i` idle; local first, then `\|`, then remote (max. 24) |
 
-`hist`: Tagesverlauf, eine Nachricht je Fenster (`k` = `s` oder `w`), bei Änderung und nach `hello`.
+`hist`: daily history, one message per window (`k` = `s` or `w`), on change and after `hello`.
 
 ```json
 {"t":"hist","k":"s","day":1790892000,"v":[-1,-1,…,12,15,17,-1,…]}
 ```
 
-`day` = lokaler Tagesbeginn 00:00 (Unix-s), `v` = 96 Werte à 15 min (0–100, `-1` = keine Daten).
+`day` = local start of the day 00:00 (Unix s), `v` = 96 values of 15 min each (0–100, `-1` = no data).
 
-`list`: Session-Liste für Seite `p` (1 = Remote, 2 = Lokal), bei Änderung und nach `hello`.
+`list`: session list for page `p` (1 = remote, 2 = local), on change and after `hello`.
 
 ```json
-{"t":"list","p":1,"at":1790975800,"l":"mein-server","i":[{"n":"Refactoring API-Client","s":"i","a":1790890000}]}
+{"t":"list","p":1,"at":1790975800,"l":"my-server","i":[{"n":"Refactoring API client","s":"i","a":1790890000}]}
 ```
 
-Max. 7 Einträge, neueste zuerst. `n` = Titel (max. 40 Zeichen), `s` = `w` arbeitet,
-`a` wartet, `i` idle, `o` offline/beendet, `a` = letzte Aktivität (Unix-s). Optional
-`err` (Fehler beim Abruf) und `l` (eigener Seitentitel, max. 14 Zeichen).
+Max. 7 entries, newest first. `n` = title (max. 40 characters), `s` = `w` working,
+`a` waiting, `i` idle, `o` offline/ended, `a` = last activity (Unix s). Optional `err`
+(error while fetching) and `l` (custom page title, max. 14 characters).
 
-**Display → Host**
+**Display → host**
 
-| Nachricht | Wann |
+| Message | When |
 |---|---|
-| `{"t":"hello","fw":"2.1.0"}` | Nach dem Start. Der Host schickt sofort `state`, beide `hist` und beide `list` |
-| `{"t":"ack","s":17.0,"w":24.0,"b":255,"l":0}` | Nach jedem `state`: übernommene Werte, Ziel-Helligkeit `b` (0–255), Lichtsensor roh `l` |
+| `{"t":"hello","fw":"2.1.0"}` | After start-up. The host immediately sends `state`, both `hist` and both `list` |
+| `{"t":"ack","s":17.0,"w":24.0,"b":255,"l":0}` | After every `state`: the accepted values, target brightness `b` (0–255), raw light sensor value `l` |
 
-**Timing:** Verbrauch alle 120 s, lokale Sessions alle 2 s, Remote-Liste alle 30 s,
-Sperre alle 2 s, Heartbeat alle 30 s, Offline-Screen nach 90 s ohne `state`.
-Die Countdowns rechnet das Board selbst aus `r` und seiner vom Host gestellten Uhr.
+**Timing:** usage every 120 s, local sessions every 2 s, remote list every 30 s, lock
+state every 2 s, heartbeat every 30 s, offline screen after 90 s without `state`.
+The board computes the countdowns itself from `r` and the clock set by the host.
 
-## Deinstallation
+## Uninstall
 
-Reihenfolge beachten: Für das Wiederherstellen der Original-Firmware braucht es
-PlatformIO (esptool).
+Mind the order: restoring the original firmware needs PlatformIO (esptool).
 
-**1. Optional: Original-Firmware wiederherstellen** (die in Setup-Schritt 1 gesicherte
-Datei). Vorher den Collector stoppen (`Stop-ScheduledTask 'Claude Usage Display'`).
+**1. Optional: restore the original firmware** (the file backed up in setup step 1).
+Stop the collector first (`Stop-ScheduledTask 'Claude Usage Display'`).
 
 ```powershell
 pio pkg exec -p tool-esptoolpy -- esptool.py --chip esp32 --port COMx --baud 460800 write_flash 0 firmware\backup\original-firmware.bin
 ```
 
-**2. Host-Teil entfernen:**
+**2. Remove the host part:**
 
 ```powershell
 pwsh -NoProfile -ExecutionPolicy Bypass -File .\host\uninstall.ps1
 ```
 
-Entfernt den Task, beendet den Collector und löscht `%USERPROFILE%\.usage-display`.
-Optionale Schalter:
+Removes the task, stops the collector and deletes `%USERPROFILE%\.usage-display`.
+Optional switches:
 
-- `-Logout` meldet zusätzlich die Claude-CLI ab.
-- `-RemovePlatformIO` löscht zusätzlich `%USERPROFILE%\.platformio`. Erst nach Schritt 1
-  verwenden, und nur, wenn PlatformIO ausschließlich für dieses Projekt installiert wurde:
-  Der Ordner enthält auch die Werkzeuge anderer PlatformIO-Projekte und der VS-Code-Erweiterung.
+- `-Logout` also signs out the Claude CLI.
+- `-RemovePlatformIO` also deletes `%USERPROFILE%\.platformio`. Only use it after step 1,
+  and only if you installed PlatformIO just for this project: the folder also holds the
+  tools of other PlatformIO projects and of the VS Code extension.
 
-`~\.claude\settings.json` wird von diesem Projekt nicht verändert.
+This project does not modify `~\.claude\settings.json`.
 
-## Hardware-Notizen
+## Hardware notes
 
-- Getestet mit ESP32-D0WD-V3, 4 MB Flash, CH340 (VID 1A86, PID 7523).
-- Panel der Dual-USB-Revision: ST7789-Familie (Controller-ID `81 81 B3`, per SPI
-  ausgelesen), keine Invertierung, BGR, Rotation 1 = Querformat 320×240.
-- SPI: SCLK 14, MOSI 13, MISO 12, CS 15, DC 2, kein Reset-Pin. Backlight GPIO 21 (PWM).
-  Touch (XPT2046): CLK 25, MOSI 32, MISO 39, CS 33, IRQ 36. Lichtsensor GPIO 34.
-- Ohne Reset-Pin behält das Panel seine Register bis zum Stromlos-Machen. Die Firmware
-  setzt es deshalb beim Start per Software-Reset zurück und schreibt danach `B6h`
-  (Gate-Scan-Richtung). Das Bild ist so nach jedem Neustart gleich, egal welche Firmware
-  vorher lief.
-- Auto-Reset-Schaltung: RTS → EN, DTR → GPIO0. Deshalb öffnet der Collector den Port
-  mit `DtrEnable = RtsEnable = false`.
+- Tested with ESP32-D0WD-V3, 4 MB flash, CH340 (VID 1A86, PID 7523).
+- Panel of the dual-USB revision: ST7789 family (controller ID `81 81 B3`, read back via
+  SPI), no inversion, BGR, rotation 1 = landscape 320×240.
+- SPI: SCLK 14, MOSI 13, MISO 12, CS 15, DC 2, no reset pin. Backlight GPIO 21 (PWM).
+  Touch (XPT2046): CLK 25, MOSI 32, MISO 39, CS 33, IRQ 36. Light sensor GPIO 34.
+- Without a reset pin the panel keeps its registers until power is removed. The firmware
+  therefore resets it by software at start-up and then writes `B6h` (gate scan
+  direction). This way the image is the same after every restart, whatever firmware ran
+  before.
+- Auto-reset circuit: RTS → EN, DTR → GPIO0. That is why the collector opens the port
+  with `DtrEnable = RtsEnable = false`.
 
-Pin- und Takt-Erkenntnisse sind zum Teil vom Projekt
-[Blink](https://github.com/KfirLevy258/Blink) inspiriert. Code wurde von dort nicht
-übernommen.
+Some of the pin and clock findings were inspired by the
+[Blink](https://github.com/KfirLevy258/Blink) project. No code was taken from it.
 
-## Lizenz
+## License
 
-MIT mit "Commons Clause": Nutzen, Ändern und Weitergeben ist frei, der Verkauf bzw.
-kostenpflichtige Angebote, deren Wert im Wesentlichen aus dieser Software stammt, sind nicht
-erlaubt. Details in [LICENSE](LICENSE).
+MIT with the "Commons Clause": you may use, modify and share it freely, but selling it or
+offering paid products or services whose value derives substantially from this software
+is not allowed. See [LICENSE](LICENSE) for details.
