@@ -430,7 +430,8 @@ static void renderDotsFooter(const char *dots, const char *right) {
   bar.pushSprite(0, FOOTER_Y);
 }
 
-// Listenzeile i; it == nullptr = leere Zeile. right = Alter bzw. "wartet". hl: getippt.
+// Listenzeile i; it == nullptr = leere Zeile. right = Alter bzw. "wartet", davor der
+// Kontext-Füllstand (ab 75 % orange, ab 90 % rot). hl: getippt.
 static void renderRow(int i, const ListItem *it, const char *right, bool hl) {
   bar.fillSprite(hl ? C_FLASH : C_BG);
   rowSt[i] = it ? it->st : 0;
@@ -440,9 +441,17 @@ static void renderRow(int i, const ListItem *it, const char *right, bool hl) {
     bar.setTextDatum(middle_right);
     bar.setTextColor(it->st == 'a' ? C_AMBER : C_DIM);
     bar.drawString(right, W - 8, ROW_H / 2);
+    int titleEnd = W - 8 - bar.textWidth(right) - 10;
+    if (it->ctx >= 0) {
+      char ctx[8];
+      snprintf(ctx, sizeof ctx, "%d%%", it->ctx);
+      bar.setTextColor(it->ctx >= 90 ? C_RED : it->ctx >= 75 ? C_AMBER : C_DIM);
+      bar.drawString(ctx, titleEnd, ROW_H / 2);
+      titleEnd -= bar.textWidth(ctx) + 10;
+    }
     char title[sizeof it->name + 3];
     strlcpy(title, it->name[0] ? it->name : "Ohne Titel", sizeof title);
-    fitText(bar, title, W - 8 - bar.textWidth(right) - 10 - 28, true);
+    fitText(bar, title, titleEnd - 28, true);
     bar.setTextDatum(middle_left);
     bar.setTextColor(C_TEXT);
     bar.drawString(title, 28, ROW_H / 2);
@@ -531,6 +540,13 @@ int uiHit(const ViewModel &vm, int x, int y) {
   return i < l.n && i < LIST_MAX && l.item[i].open ? i : HIT_NONE;
 }
 
+void uiInvert(bool on) {
+  static bool inverted = false;
+  if (on == inverted) return;
+  inverted = on;
+  lcd.invertDisplay(on);  // relativ zu PANEL_INVERT (LovyanGFX)
+}
+
 void uiFlash(int hit) {
   gTapHit = hit;
   gTapAt = millis();
@@ -540,7 +556,7 @@ void uiRender(const ViewModel &vm) {
   static Screen lastScreen = (Screen)-1;
   static uint8_t lastPage = 255;
   static char lastHeader[40], lastFooter[160], lastG[2][128], lastNotice[64], lastSess[80];
-  static char lastRow[LIST_MAX][64], lastMode;
+  static char lastRow[LIST_MAX][80], lastMode;
 
   // Animationsphase der Dots: w 600 ms an/gedimmt, a 300 ms an/aus.
   const uint32_t ms = millis();
@@ -626,14 +642,14 @@ void uiRender(const ViewModel &vm) {
     }
     for (int i = 0; mode == 'L' && i < LIST_MAX; i++) {
       const ListItem *it = i < l.n ? &l.item[i] : nullptr;
-      char right[12] = "", sig[64] = "";
+      char right[12] = "", sig[80] = "";
       if (it) {
         if (it->st == 'a') {
           strcpy(right, "wartet");
         } else {
           fmtAge(right, sizeof right, it->act, vm.now);
         }
-        snprintf(sig, sizeof sig, "%c|%s|%d|%s", it->st, right, gHl == i, it->name);
+        snprintf(sig, sizeof sig, "%c|%s|%d|%d|%s", it->st, right, it->ctx, gHl == i, it->name);
       }
       if (strcmp(sig, lastRow[i]) != 0) {
         strcpy(lastRow[i], sig);

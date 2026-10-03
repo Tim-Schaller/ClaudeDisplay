@@ -8,13 +8,14 @@
 
 #include "ui.h"
 
-static const char *FW_VERSION = "2.5.0";
+static const char *FW_VERSION = "2.6.0";
 static const uint32_t OFFLINE_AFTER_MS = 90000;
 static const uint32_t FRAME_MS = 40;            // Bildaufbau (Dot-Animation braucht < 300 ms)
 static const uint32_t RELEASE_MS = 100;         // so lange ohne Kontakt = losgelassen
 static const int SWIPE_PX = 50;                 // waagrechter Weg für einen Wisch
 static const uint32_t PAGE_TIMEOUT_MS = 60000;  // ohne Touch zurück auf Seite 0
 static const uint32_t FADE_MS = 1000;
+static const uint32_t DONE_FLASH_MS = 250;  // Hinweis "Session fertig": so lange invertiert
 
 static char line[1024];
 static size_t lineLen = 0;
@@ -32,6 +33,8 @@ static bool locked = false;  // Windows-Sitzung gesperrt (bleibt auch offline er
 
 static uint8_t page = 0;
 static uint32_t lastTapMs = 0;  // letzte Geste (für PAGE_TIMEOUT_MS)
+static uint32_t doneAt = 0;     // wann der Host "Session fertig" meldete
+static bool doneFlash = false;
 
 static int64_t nowEpoch() {
   return hostEpoch > 0 ? hostEpoch + (int64_t)((millis() - hostEpochMs) / 1000) : 0;
@@ -119,6 +122,7 @@ static void handleList(const JsonDocument &doc) {
     e.st = st && strchr("wai", st) ? st : 'o';
     e.act = readNum(it["a"], 0);
     e.open = (it["o"] | 0) == 1;
+    e.ctx = (int8_t)constrain((int)(it["c"] | -1), -1, 100);
   }
 }
 
@@ -130,6 +134,9 @@ static void handleLine(const char *s) {
     handleState(doc);
   } else if (!strcmp(t, "list")) {
     handleList(doc);
+  } else if (!strcmp(t, "done")) {  // eine Session ist fertig: kurz blitzen
+    doneAt = millis();
+    doneFlash = true;
 #ifdef SCREENSHOT
   } else if (!strcmp(t, "shot")) {
     uiScreenshot();
@@ -251,6 +258,8 @@ void loop() {
   pollSerial();
   pollTouch();
   updateBrightness();
+  if (doneFlash && millis() - doneAt >= DONE_FLASH_MS) doneFlash = false;
+  uiInvert(doneFlash && targetBrightness() > 0);
 
   static uint32_t lastFrame = 0;
   if (millis() - lastFrame < FRAME_MS) return;

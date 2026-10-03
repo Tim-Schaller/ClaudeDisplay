@@ -33,6 +33,7 @@ $HeartbeatSeconds = 30
 $LocalSeconds = 2      # CLI-Registry und Bildschirmsperre
 $DesktopSeconds = 4    # Session-Dateien der Desktop-App (inkl. "needs input")
 $RemoteSeconds = 30    # Remote-Sessions über die API
+$FinishMinBusy = 10    # so lange muss eine Session gearbeitet haben für den Hinweis "fertig"
 $RemoteUrl = 'https://api.anthropic.com/v1/code/sessions?limit=100'
 $MaxItems = 7          # Zeilen pro Listenseite
 $MaxLine = 1023        # Zeilenpuffer des Boards
@@ -252,6 +253,7 @@ function Get-LocalSessions([hashtable]$Cache, [int[]]$Exclude = @()) {
       $st = switch ($j.status) { 'busy' { 'w' } 'waiting' { 'a' } default { 'i' } }  # idle, shell
       $act = if ($j.statusUpdatedAt) { $j.statusUpdatedAt } else { $j.updatedAt }
       [pscustomobject]@{
+        Key      = if ($j.sessionId) { [string]$j.sessionId } else { "pid$($j.pid)" }
         Valid    = $valid
         Started  = [int64]$j.startedAt
         Status   = $st
@@ -310,9 +312,21 @@ function Set-DesktopWaiting($Desktop, $Local) {
   foreach ($l in $Local) { if ($l.Status -eq 'i' -and $l.HostId -and $ids[$l.HostId]) { $l.Status = 'a' } }
 }
 
+# Kontext-Füllstand (%) zur ersten Remote-Control-ID, die die API kennt; sonst $null.
+function Get-ContextPct($Ctx, $Ids) {
+  if (-not $Ctx) { return $null }
+  foreach ($i in $Ids) {
+    if (-not $i) { continue }
+    $v = $Ctx[($i -replace '^(session|cse)_', '')]
+    if ($null -ne $v) { return $v }
+  }
+  return $null
+}
+
 # Liste Seite 1 (lokal): Desktop-Sessions und laufende Terminal-Sessions. Status aus der laufenden
-# Registry-Session (hostSessionId == sessionId), sonst offline.
-function Get-LocalItems($Desktop, $Local) {
+# Registry-Session (hostSessionId == sessionId), sonst offline. c = Kontext-Füllstand, den die
+# Remote-API über die Remote-Control-ID liefert (nur mit Remote Control).
+function Get-LocalItems($Desktop, $Local, $Ctx) {
   $running = @{}
   foreach ($l in $Local) { if ($l.Valid -and $l.HostId) { $running[$l.HostId] = $l } }
   $items = @(foreach ($d in $Desktop) {
@@ -322,15 +336,36 @@ function Get-LocalItems($Desktop, $Local) {
         n  = $d.Title
         s  = if ($l) { $l.Status } else { 'o' }
         a  = if ($l -and $l.Activity -gt $d.Activity) { $l.Activity } else { $d.Activity }
+        c  = Get-ContextPct $Ctx (@($d.Bridges) + @(if ($l) { $l.Bridge }))
         Id = $d.Id  # local_...: zum Öffnen per Tippen (Terminal-Sessions haben keine)
       }
     })
   foreach ($l in $Local) {
     if ($l.Valid -and -not $l.Desktop) {
-      $items += [pscustomobject]@{ n = if ($l.Name) { $l.Name } else { 'Terminal' }; s = $l.Status; a = $l.Activity }
+      $items += [pscustomobject]@{ n = if ($l.Name) { $l.Name } else { 'Terminal' }; s = $l.Status; a = $l.Activity; c = Get-ContextPct $Ctx @($l.Bridge) }
     }
   }
   return $items
+}
+
+# Hinweis "fertig": Eine Session, die mindestens $MinBusy gearbeitet hat, ist jetzt idle oder
+# wartet. $Now/$MinBusy: lokal in Sekunden, Remote in Abrufen (die Liste kommt nur alle 30 s,
+# eine Sekunden-Schwelle wäre dort wirkungslos). $Busy merkt sich je Session (Key), seit wann
+# sie arbeitet; was verschwindet (beendet, getrennt), löst nichts aus. $Current: @{ Key; s }.
+function Update-Finished([hashtable]$Busy, $Current, [int64]$Now, [int64]$MinBusy) {
+  $finished = $false
+  $seen = @{}
+  foreach ($c in $Current) {
+    $seen[$c.Key] = $true
+    if ($c.s -eq 'w') {
+      if (-not $Busy.ContainsKey($c.Key)) { $Busy[$c.Key] = $Now }
+    } elseif ($Busy.ContainsKey($c.Key)) {
+      if ($c.s -in 'i', 'a' -and $Now - $Busy[$c.Key] -ge $MinBusy) { $finished = $true }
+      $Busy.Remove($c.Key)
+    }
+  }
+  foreach ($k in @($Busy.Keys)) { if (-not $seen.ContainsKey($k)) { $Busy.Remove($k) } }
+  return $finished
 }
 
 # IDs der lokal gestarteten Remote-Control-Sitzungen, ohne Präfix session_/cse_.
@@ -369,8 +404,10 @@ function Receive-RemoteFetch($Task, $LocalIds) {
     $code = [int]$resp.StatusCode
     if ($code -eq 401 -or $code -eq 403) { return @{ Err = 'Liste: Login abgelaufen'; Detail = "HTTP $code" } }
     if (-not $resp.IsSuccessStatusCode) { return @{ Err = 'Liste nicht abrufbar'; Detail = "HTTP $code" } }
-    try { return @{ Items = @(ConvertFrom-RemoteSessions $resp.Content.ReadAsStringAsync().Result $LocalIds) } }
-    catch { return @{ Err = 'Liste nicht abrufbar'; Detail = 'Antwort nicht lesbar' } }  # Text kann Titel enthalten
+    try {
+      $ctx = @{}
+      return @{ Items = @(ConvertFrom-RemoteSessions $resp.Content.ReadAsStringAsync().Result $LocalIds $ctx); Ctx = $ctx }
+    } catch { return @{ Err = 'Liste nicht abrufbar'; Detail = 'Antwort nicht lesbar' } }  # Text kann Titel enthalten
   } finally {
     $resp.Dispose()
   }
@@ -378,19 +415,26 @@ function Receive-RemoteFetch($Task, $LocalIds) {
 
 # Remote-Sessions aus GET /v1/code/sessions (interne, undokumentierte Schnittstelle, daher
 # defensiv). Archivierte und lokal gestartete (Bridge-IDs) weglassen; Rest = andere Rechner.
-function ConvertFrom-RemoteSessions([string]$Json, $LocalIds) {
+# $Ctx bekommt den Kontext-Füllstand in % aller Sessions (auch der lokalen, für Seite 1),
+# Schlüssel = ID ohne Präfix cse_/session_.
+function ConvertFrom-RemoteSessions([string]$Json, $LocalIds, [hashtable]$Ctx = @{}) {
   $o = $Json | ConvertFrom-Json -DateKind String -NoEnumerate
   $rows = if ($o -is [array]) { $o } elseif ($o.data -is [array]) { $o.data } else { throw 'Antwort ohne data' }
   foreach ($r in $rows) {
     if ($r.id -isnot [string] -or $r.status -eq 'archived') { continue }
-    if ($LocalIds.Contains(($r.id -replace '^(cse|session)_', ''))) { continue }
+    $body = $r.id -replace '^(cse|session)_', ''
+    $u = $r.external_metadata.context_usage
+    if ($u -and [double]$u.max_tokens -gt 0) {
+      $Ctx[$body] = [int][Math]::Min(100, [Math]::Max(0, [Math]::Round(100 * [double]$u.used_tokens / [double]$u.max_tokens)))
+    }
+    if ($LocalIds.Contains($body)) { continue }
     $a = [int64]0
     try { $a = [DateTimeOffset]::Parse($r.last_event_at, [Globalization.CultureInfo]::InvariantCulture).ToUnixTimeSeconds() } catch { }
     # Nur worker_status: status_bucket "blocked" ist eine KI-Zusammenfassung nach dem Turn
     # ("braucht noch etwas von dir") und keine offene Rückfrage.
     $s = switch ($r.worker_status) { 'running' { 'w' } 'requires_action' { 'a' } default { 'i' } }
     if ($r.connection_status -eq 'disconnected') { $s = 'o' }
-    [pscustomobject]@{ n = [string]$r.title; s = $s; a = $a; Id = $r.id; Connected = $r.connection_status -eq 'connected' }
+    [pscustomobject]@{ n = [string]$r.title; s = $s; a = $a; c = $Ctx[$body]; Id = $r.id; Connected = $r.connection_status -eq 'connected' }
   }
 }
 
@@ -545,6 +589,7 @@ function Get-ListLine([int]$Page, $Items, [int64]$At, [string]$ErrorText) {
   $list = @(Select-ListItems $Items | ForEach-Object {
       $e = [ordered]@{ n = Get-ShownTitle $_.n; s = $_.s; a = [int64]$_.a }
       if (Test-Openable $_) { $e.o = 1 }
+      if ($null -ne $_.c) { $e.c = [int]$_.c }
       $e
     })
   while ($true) {
@@ -633,6 +678,11 @@ $remote = @()           # letzte gute Remote-Liste (andere Rechner)
 $remoteAt = [int64]0
 $remoteErr = ''
 $remoteTask = $null
+$remoteCtx = @{}         # Kontext-Füllstand je Session (aus dem letzten Remote-Abruf)
+$busyLocal = @{}         # lokale Session -> arbeitet seit (Unix-s), für den Hinweis "fertig"
+$busyRemote = @{}        # Remote-Session -> arbeitet seit (Nummer des Abrufs)
+$remoteFetches = [int64]0
+$donePending = $false
 $lines = @{}            # zuletzt gebaute list-Zeilen
 $shown = @{ 1 = @(); 2 = @() }  # deren Sessions in Anzeigereihenfolge (für Open-Session)
 $pending = [Collections.Generic.List[string]]::new()  # davon noch zu senden
@@ -723,7 +773,16 @@ try {
         $res = Receive-RemoteFetch $t (Get-LocalBridgeIds $desktopSessions $localSessions)
       }
       if ($res) {
-        if ($res.ContainsKey('Items')) { $remote = $res.Items; $remoteAt = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds() }
+        if ($res.ContainsKey('Items')) {
+          $remote = $res.Items
+          $remoteCtx = $res.Ctx
+          # Hinweis "fertig" für Remote: mindestens zwei Abrufe in Folge "arbeitet" (ca. 30 s).
+          $remoteFetches++
+          $cur = @($remote | Where-Object Connected | ForEach-Object { @{ Key = $_.Id; s = $_.s } })
+          if ((Update-Finished $busyRemote $cur $remoteFetches 2) -and -not $locked) { $donePending = $true }
+          $remoteAt = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
+          $localDirty = $true  # Kontext-Füllstand der lokalen Sessions
+        }
         $e = [string]$res.Err
         if ($e -ne $remoteErr) {
           Write-Log $(if ($e) { "Remote-Sessions nicht abrufbar: $($res.Detail)" } else { 'Remote-Sessions wieder abrufbar' })
@@ -734,7 +793,10 @@ try {
 
       if ($localDirty) {
         Set-DesktopWaiting $desktopSessions $localSessions
-        $localItems = @(Get-LocalItems $desktopSessions $localSessions)
+        $localItems = @(Get-LocalItems $desktopSessions $localSessions $remoteCtx)
+        $cur = @($localSessions | Where-Object Valid | ForEach-Object { @{ Key = $_.Key; s = $_.Status } })
+        $nowS = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
+        if ((Update-Finished $busyLocal $cur $nowS $FinishMinBusy) -and -not $locked) { $donePending = $true }
         $shown[1] = Select-ListItems $localItems
         Update-Line 'l1' (Get-ListLine 1 $localItems ([DateTimeOffset]::UtcNow.ToUnixTimeSeconds()) '')
       }
@@ -773,6 +835,7 @@ try {
             $rx = ''
             $nextSend = [DateTime]::UtcNow.AddMilliseconds(1500)  # falls das Board beim Öffnen neu startet
             $stateSent = $false
+            $donePending = $false  # alter Hinweis gilt nicht für ein neu verbundenes Display
             Reset-Pending
             break
           } catch {
@@ -822,6 +885,9 @@ try {
           Send-Line $port (Get-StateLine $usage $fetchedAt $err $forecast $locked $dots $sessLine)
           $nextSend = [DateTime]::UtcNow.AddSeconds($HeartbeatSeconds)
           $stateSent = $true
+        } elseif ($verified -and $donePending) {
+          Send-Line $port '{"t":"done"}'  # Session fertig: Display blitzt kurz
+          $donePending = $false
         } elseif ($verified -and $stateSent -and $pending.Count) {
           # list einzeln pro Durchlauf (250 ms), damit der Empfangspuffer des Boards
           # (2 KB) auch während eines Redraws nicht überläuft.

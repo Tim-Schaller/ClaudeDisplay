@@ -26,6 +26,7 @@ struct ListItem {
   char st = 'o';       // w arbeitet, a wartet, i idle, o offline/beendet
   int64_t act = 0;     // letzte Aktivität als Unix-Sekunden, 0 = unbekannt
   bool open = false;   // lässt sich per Tippen am PC öffnen
+  int8_t ctx = -1;     // Kontext-Füllstand in %, -1 = unbekannt
 };
 
 struct SessionList {
@@ -63,6 +64,7 @@ bool uiTouch(int *x, int *y);  // berührt? dann mit Bildschirmkoordinaten
 static const int HIT_NONE = -2, HIT_SESSION = -1;
 int uiHit(const ViewModel &vm, int x, int y);
 void uiFlash(int hit);  // getroffene Zeile kurz hervorheben
+void uiInvert(bool on);  // ganzen Bildschirm invertieren (Hinweis "Session fertig")
 #ifdef SCREENSHOT
 void uiScreenshot();
 #endif
