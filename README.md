@@ -265,9 +265,9 @@ internally. It briefly starts the Claude CLI in headless mode
 - **Dots:** local sessions on the left, connected remote sessions after the separator.
   Pulsing green = working, fast-blinking orange = waiting for you, gray = idle. "Waiting"
   means an open permission prompt or question; for local Claude Desktop sessions also a
-  finished turn that the app marks yellow ("needs input", e.g. Claude asks for a go-ahead).
-  For remote sessions only open prompts count. If you clear the yellow dot in the app with
-  "Mark as completed", the display does not notice (that state is not stored in a file).
+  finished turn that the app marks yellow ("needs input", e.g. Claude asks for a go-ahead)
+  until you open the session. For remote sessions only open prompts count. Clearing the
+  yellow dot via "Mark as completed" in the app's menu is not visible to the display.
 
 **Pages 1 (Local, "Lokal") and 2 (Remote):** the last 7 sessions with a status dot (colors
 as above, hollow ring = offline/ended), title and age of the last activity ("5 min",

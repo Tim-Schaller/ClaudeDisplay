@@ -259,8 +259,8 @@ function Get-LocalSessions([hashtable]$Cache, [int[]]$Exclude = @()) {
 # Sessions der Desktop-App (Code-Tab). Die App ist ein MSIX-Paket: Für Prozesse außerhalb
 # (Taskplaner) liegen ihre Daten unter Packages\Claude_*\LocalCache\Roaming. Beide Orte
 # prüfen, doppelte per sessionId zusammenführen (neuere gewinnt).
-# NeedsInput: Die App stuft die letzte Antwort als "blocked" ein (Rückfrage, Freigabe) und zeigt
-# die Session gelb, solange die CLI nicht weiterarbeitet.
+# NeedsInput: Die App stuft die letzte Antwort als "blocked" ein (Rückfrage, Freigabe) und die
+# Session wurde seitdem nicht geöffnet; so lange zeigt die App sie gelb.
 function Get-DesktopSessions([hashtable]$Cache) {
   $dirs = @(Join-Path $env:APPDATA 'Claude\claude-code-sessions')
   try {
@@ -284,7 +284,7 @@ function Get-DesktopSessions([hashtable]$Cache) {
           Archived = [bool]$j.isArchived
           Bridges  = @($j.bridgeSessionIds | Where-Object { $_ -is [string] })
           NeedsInput = $j.postTurnSummary.status_category -eq 'blocked' -and $j.postTurnSummaryFor -and
-            $j.postTurnSummaryFor -eq $j.lastAssistantUuid
+            $j.postTurnSummaryFor -eq $j.lastAssistantUuid -and [double]$j.lastFocusedAt -lt [double]$j.lastActivityAt
         }
       })) {
     if (-not $s.Id) { continue }
