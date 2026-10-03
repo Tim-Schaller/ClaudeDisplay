@@ -1,0 +1,14 @@
+# PlatformIO-Build-Cache und Bibliotheken (werden beim Build neu erzeugt)
+firmware/.pio/
+# Flash-Backups des eigenen Boards (siehe README, Setup Schritt 1)
+firmware/backup/
+*.bin
+# Editor- und Tool-Dateien mit lokalen Pfaden
+.vscode/
+firmware/.vscode/
+.claude/settings.local.json
+# Laufzeitdateien des Collectors, falls sie zum Debuggen hierher kopiert werden
+*.log
+config.json
+latest.json
+history.json
