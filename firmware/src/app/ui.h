@@ -17,12 +17,15 @@ struct SessionLine {
   char st = 0;         // a wartet, w arbeitet, i alle idle, 0 = keine Angabe
   char name[41] = "";  // Titel (ASCII)
   uint8_t more = 0;    // weitere aktive Sessions
+  int64_t since = 0;   // wartet seit (Unix-s), 0 = unbekannt
+  bool open = false;   // lässt sich per Tippen am PC öffnen
 };
 
 struct ListItem {
   char name[41] = "";  // Titel (ASCII)
   char st = 'o';       // w arbeitet, a wartet, i idle, o offline/beendet
   int64_t act = 0;     // letzte Aktivität als Unix-Sekunden, 0 = unbekannt
+  bool open = false;   // lässt sich per Tippen am PC öffnen
 };
 
 struct SessionList {
@@ -53,7 +56,13 @@ struct ViewModel {
 void uiBegin(const char *fwVersion);
 void uiRender(const ViewModel &vm);
 void uiSetBrightness(uint8_t level);
-bool uiTouched();
+bool uiTouch(int *x, int *y);  // berührt? dann mit Bildschirmkoordinaten
+
+// Was liegt unter (x, y) auf der zuletzt gezeichneten Seite: eine Listenzeile (0..LIST_MAX-1),
+// die Session-Zeile (HIT_SESSION) oder nichts zum Öffnen (HIT_NONE).
+static const int HIT_NONE = -2, HIT_SESSION = -1;
+int uiHit(const ViewModel &vm, int x, int y);
+void uiFlash(int hit);  // getroffene Zeile kurz hervorheben
 #ifdef SCREENSHOT
 void uiScreenshot();
 #endif

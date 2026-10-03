@@ -1,4 +1,4 @@
-﻿<#
+<#
   Claude-Usage-Display: Einrichtung in einem Schritt (aus dem Release-ZIP, Setup.cmd).
   - prüft Claude Desktop und PowerShell 7 (bietet die Installation an)
   - findet das CYD am USB-Port
@@ -163,4 +163,4 @@ if ($LASTEXITCODE -ne 0) { Write-Fail 'Installing the background service failed 
 if (Test-Path $Work) { Remove-Item $Work -Recurse -Force }
 Write-Host ''
 Write-Host 'Done! Within a few seconds the display shows your Claude usage.' -ForegroundColor Green
-Write-Host 'Tap the display to switch pages (Home, Local, Remote). To uninstall: Uninstall.cmd'
+Write-Host 'Tap a session on the display to open it on the PC, anywhere else to switch pages. To uninstall: Uninstall.cmd'

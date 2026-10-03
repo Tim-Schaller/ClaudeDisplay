@@ -16,6 +16,8 @@
     oder hello binnen 6 s); sonst wird er wieder geschlossen und 10 min übersprungen.
   - Hält den Port offen und sendet als NDJSON: state sofort bei Änderung und alle 30 s
     (Heartbeat + Uhrzeit, Dots, Session-Zeile), list bei Änderung. Nach dem Verbinden bzw. hello alles einmal.
+  - Tippt man am Display auf eine Session (open), öffnet er sie: lokale in Claude Desktop,
+    Remote-Sessions auf claude.ai/code.
   - Übersteht Ab- und Anstecken; schreibt ein knappes Log nach collector.log
     (nie Session-Titel, nie Token).
 #>
@@ -70,6 +72,13 @@ function ConvertTo-DisplayTitle([string]$Text) {
   $t = ($t.Normalize([Text.NormalizationForm]::FormD) -replace '\s', ' ' -replace '[^\x20-\x7E]', '' -replace ' {2,}', ' ').Trim()
   if ($t.Length -gt 40) { $t = $t.Substring(0, 40).TrimEnd() }
   return $t
+}
+
+# Titel so, wie das Display ihn zeigt; daran erkennt Open-Session auch die getippte Session.
+function Get-ShownTitle([string]$Text) {
+  $n = ConvertTo-DisplayTitle $Text
+  if ($n) { return $n }
+  return '(ohne Titel)'
 }
 
 function ConvertTo-Window($w) {
@@ -310,9 +319,10 @@ function Get-LocalItems($Desktop, $Local) {
       if ($d.Archived) { continue }
       $l = $running[$d.Id]
       [pscustomobject]@{
-        n = $d.Title
-        s = if ($l) { $l.Status } else { 'o' }
-        a = if ($l -and $l.Activity -gt $d.Activity) { $l.Activity } else { $d.Activity }
+        n  = $d.Title
+        s  = if ($l) { $l.Status } else { 'o' }
+        a  = if ($l -and $l.Activity -gt $d.Activity) { $l.Activity } else { $d.Activity }
+        Id = $d.Id  # local_...: zum Öffnen per Tippen (Terminal-Sessions haben keine)
       }
     })
   foreach ($l in $Local) {
@@ -402,8 +412,45 @@ function Get-SessionLine($LocalItems, $Remote) {
   $active = @($live | Where-Object { $_.s -eq 'a' -or $_.s -eq 'w' } |
       Sort-Object @{ e = { $_.s -eq 'a' }; Descending = $true }, @{ e = 'a'; Descending = $true })
   if ($active.Count -eq 0) { if ($live.Count) { return [ordered]@{ s = 'i' } } else { return $null } }
-  $n = ConvertTo-DisplayTitle $active[0].n
-  return [ordered]@{ s = $active[0].s; n = $(if ($n) { $n } else { '(ohne Titel)' }); m = $active.Count - 1 }
+  $x = [ordered]@{ s = $active[0].s; n = Get-ShownTitle $active[0].n; m = $active.Count - 1 }
+  # Wartet seit: Statuswechsel bzw. Ende des Turns (lokal), letztes Ereignis (Remote).
+  if ($x.s -eq 'a' -and $active[0].a -gt 0) { $x.t = [int64]$active[0].a }
+  if (Test-Openable $active[0]) { $x.o = 1 }
+  return $x
+}
+
+# Tippen auf eine Session am Display: lokale in Claude Desktop öffnen (Deep-Link der App),
+# Remote-Sessions auf claude.ai/code im Browser. Das Board schickt Seite, Zeile und
+# angezeigten Titel. Auf Seite 1/2 gilt die Zeile der zuletzt gebauten Liste, wenn der Titel
+# passt; sonst (Liste inzwischen geändert) wird nach dem Titel gesucht, bei gleichem Titel die
+# wartende bzw. zuletzt aktive. Ins Log nur Seite, Zeile und Tipp-Position, nie den Titel.
+function Open-Session($Msg, $Shown, $LocalItems, $Remote) {
+  $p = [int]$Msg.p
+  $i = [int]$Msg.i
+  $hit = $null
+  if ($p -in 1, 2 -and $i -ge 0 -and $i -lt @($Shown[$p]).Count) {
+    $c = @($Shown[$p])[$i]
+    if ((Get-ShownTitle $c.n) -ceq [string]$Msg.n) { $hit = $c }
+  }
+  if (-not $hit) {
+    $pool = switch ($p) {
+      0 { @(@($LocalItems) + @($Remote) | Where-Object { $_ -and $_.s -in 'a', 'w' }) }
+      1 { @($LocalItems) }
+      2 { @($Remote) }
+      default { @() }
+    }
+    $hit = @($pool | Where-Object { $_ -and (Get-ShownTitle $_.n) -ceq [string]$Msg.n } |
+        Sort-Object @{ e = { $_.s -eq 'a' }; Descending = $true }, @{ e = 'a'; Descending = $true }) |
+      Select-Object -First 1
+  }
+  $where = "Seite $p, Zeile $i, Tipp bei $($Msg.x)/$($Msg.y)"
+  if (-not $hit) { Write-Log "Display: Session nicht gefunden ($where)"; return }
+  if (-not (Test-Openable $hit)) { Write-Log "Display: Session laesst sich nicht oeffnen, z. B. Terminal ($where)"; return }
+  # Remote-IDs kommen teils als cse_..., die Web-Adresse nutzt session_... (gleicher Rest).
+  $url = if ($hit.Id -like 'local_*') { "claude://claude.ai/epitaxy/$($hit.Id)" }
+  else { 'https://claude.ai/code/' + ($hit.Id -replace '^cse_', 'session_') }
+  Start-Process $url
+  Write-Log "Display: Session geoeffnet ($where)"
 }
 
 # Gesperrt = der Sperrbildschirm (LogonUI.exe) läuft.
@@ -481,14 +528,23 @@ function Get-StateLine($Usage, [int64]$FetchedAt, [string]$ErrorText, $Forecast,
 # list-Zeile für Seite 1/2: neueste 7, Titel als ASCII; passt die Zeile nicht in 1023 Byte,
 # fallen die ältesten weg. at auf die Minute abgerundet (angezeigt wird nur "Stand HH:MM"):
 # Ohne inhaltliche Änderung geht eine Liste so höchstens einmal pro Minute neu raus.
+# Was eine Listenseite zeigt, in dieser Reihenfolge: die zuletzt aktiven $MaxItems Sessions.
+function Select-ListItems($Items) {
+  return @($Items | Where-Object { $_ } | Sort-Object -Property a -Descending -Stable | Select-Object -First $MaxItems)
+}
+
+# Ob sich eine Session per Tippen öffnen lässt (Terminal-Sessions haben keine Id).
+function Test-Openable($Item) { return [string]$Item.Id -match '^[A-Za-z0-9_-]+$' }
+
 function Get-ListLine([int]$Page, $Items, [int64]$At, [string]$ErrorText) {
   $msg = [ordered]@{ t = 'list'; p = $Page }
   if ($Labels[$Page]) { $msg.l = $Labels[$Page] }
   if ($At -gt 0) { $msg.at = $At - $At % 60 }
   if ($ErrorText) { $msg.err = $ErrorText }
-  $list = @($Items | Where-Object { $_ } | Sort-Object -Property a -Descending -Stable | Select-Object -First $MaxItems | ForEach-Object {
-      $n = ConvertTo-DisplayTitle $_.n
-      [ordered]@{ n = if ($n) { $n } else { '(ohne Titel)' }; s = $_.s; a = [int64]$_.a }
+  $list = @(Select-ListItems $Items | ForEach-Object {
+      $e = [ordered]@{ n = Get-ShownTitle $_.n; s = $_.s; a = [int64]$_.a }
+      if (Test-Openable $_) { $e.o = 1 }
+      $e
     })
   while ($true) {
     $msg.i = $list
@@ -577,6 +633,7 @@ $remoteAt = [int64]0
 $remoteErr = ''
 $remoteTask = $null
 $lines = @{}            # zuletzt gebaute list-Zeilen
+$shown = @{ 1 = @(); 2 = @() }  # deren Sessions in Anzeigereihenfolge (für Open-Session)
 $pending = [Collections.Generic.List[string]]::new()  # davon noch zu senden
 $stateSent = $false
 
@@ -677,9 +734,13 @@ try {
       if ($localDirty) {
         Set-DesktopWaiting $desktopSessions $localSessions
         $localItems = @(Get-LocalItems $desktopSessions $localSessions)
+        $shown[1] = Select-ListItems $localItems
         Update-Line 'l1' (Get-ListLine 1 $localItems ([DateTimeOffset]::UtcNow.ToUnixTimeSeconds()) '')
       }
-      if ($remoteDirty) { Update-Line 'l2' (Get-ListLine 2 $remote $remoteAt $remoteErr) }
+      if ($remoteDirty) {
+        $shown[2] = Select-ListItems $remote
+        Update-Line 'l2' (Get-ListLine 2 $remote $remoteAt $remoteErr)
+      }
       if ($localDirty -or $remoteDirty) {
         $d = Get-Dots $localSessions $remote
         $x = Get-SessionLine $localItems $remote
@@ -742,6 +803,9 @@ try {
             Write-Log "Display gestartet (Firmware $($msg.fw))"
             $nextSend = [DateTime]::UtcNow
             Reset-Pending
+          } elseif ($msg.t -eq 'open' -and $verified) {
+            # Fehler hier dürfen nicht als Verbindungsabbruch gelten (äußerer catch).
+            try { Open-Session $msg $shown $localItems $remote } catch { Write-Log "Display: Oeffnen fehlgeschlagen: $($_.Exception.Message)" }
           }
         }
         if ($rx.Length -gt 4096) { $rx = '' }

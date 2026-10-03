@@ -1,5 +1,6 @@
 // Claude-Usage-Display: empfängt Usage-Stand, Session-Status und Session-Listen als
-// NDJSON über USB-Serial (115200 Baud) und zeigt sie an. Tippen wechselt die Seite.
+// NDJSON über USB-Serial (115200 Baud) und zeigt sie an. Tippen auf eine Session bittet
+// den Host, sie am PC zu öffnen; Tippen woanders wechselt die Seite.
 // Protokoll: siehe README.md, Abschnitt "Protokoll".
 
 #include <Arduino.h>
@@ -7,7 +8,7 @@
 
 #include "ui.h"
 
-static const char *FW_VERSION = "2.4.0";
+static const char *FW_VERSION = "2.5.0";
 static const uint32_t OFFLINE_AFTER_MS = 90000;
 static const uint32_t FRAME_MS = 40;            // Bildaufbau (Dot-Animation braucht < 300 ms)
 static const uint32_t TAP_GAP_MS = 300;         // Entprellung: so lange vorher keine Berührung
@@ -83,12 +84,15 @@ static void handleState(const JsonDocument &doc) {
   }
   dots[n] = 0;
 
-  // Session-Zeile: x = {s: a|w|i, n: Titel, m: weitere aktive}; fehlt x, bleibt die Zeile leer.
+  // Session-Zeile: x = {s: a|w|i, n: Titel, m: weitere aktive, t: wartet seit, o: öffenbar};
+  // fehlt x, bleibt die Zeile leer.
   JsonVariantConst x = doc["x"];
   const char st = (x["s"] | "")[0];
   vm.sess.st = st && strchr("awi", st) ? st : 0;
   copyAscii(vm.sess.name, x["n"] | "", sizeof vm.sess.name);
   vm.sess.more = (uint8_t)constrain((int)(x["m"] | 0), 0, 99);
+  vm.sess.since = readNum(x["t"], 0);
+  vm.sess.open = (x["o"] | 0) == 1;
 
   haveData = true;
   lastRxMs = millis();
@@ -113,6 +117,7 @@ static void handleList(const JsonDocument &doc) {
     const char st = (it["s"] | "o")[0];
     e.st = st && strchr("wai", st) ? st : 'o';
     e.act = readNum(it["a"], 0);
+    e.open = (it["o"] | 0) == 1;
   }
 }
 
@@ -154,23 +159,46 @@ static void pollSerial() {
   }
 }
 
-// Tippen = nächste Seite. Als neuer Tipp zählt eine Berührung erst, wenn die letzte
-// Abfrage keine sah (Flanke; ein langer Redraw dazwischen zählt nicht als Loslassen)
-// und vorher 300 ms lang keine war (Entprellung). Bei aus geschaltetem Display ignorieren.
+// Bittet den Host, die getippte Session zu öffnen (p = Seite, i = Zeile bzw. -1 für die
+// Session-Zeile, n = angezeigter Titel; x/y nur zur Diagnose der Touch-Kalibrierung).
+static void sendOpen(int hit, const char *name, int x, int y) {
+  JsonDocument d;
+  d["t"] = "open";
+  d["p"] = page;
+  d["i"] = hit;
+  d["n"] = name;
+  d["x"] = x;
+  d["y"] = y;
+  serializeJson(d, Serial);
+  Serial.print('\n');
+}
+
+// Tippen auf eine Session (Session-Zeile bzw. Listenzeile) = am PC öffnen, sonst nächste
+// Seite. Als neuer Tipp zählt eine Berührung erst, wenn die letzte Abfrage keine sah
+// (Flanke; ein langer Redraw dazwischen zählt nicht als Loslassen) und vorher 300 ms lang
+// keine war (Entprellung). Bei aus geschaltetem Display ignorieren.
 static void pollTouch() {
   static uint32_t lastPoll = 0;
   static bool wasTouched = false;
   if (millis() - lastPoll < 20) return;
   lastPoll = millis();
-  const bool touched = uiTouched();
+  int x = 0, y = 0;
+  const bool touched = uiTouch(&x, &y);
   const bool edge = touched && !wasTouched;
   wasTouched = touched;
   if (!touched) return;
   const bool fresh = edge && millis() - lastTouchMs > TAP_GAP_MS;
   lastTouchMs = millis();
   if (!fresh || targetBrightness() == 0) return;
-  page = (page + 1) % 3;
   lastTapMs = millis();
+  vm.page = page;  // uiHit prüft gegen die angezeigte Seite
+  const int hit = uiHit(vm, x, y);
+  if (hit == HIT_NONE) {
+    page = (page + 1) % 3;
+    return;
+  }
+  sendOpen(hit, hit == HIT_SESSION ? vm.sess.name : vm.list[page - 1].item[hit].name, x, y);
+  uiFlash(hit);
 }
 
 // Backlight voll an, bei gesperrter Windows-Sitzung aus; Übergänge weich (ca. 1 s).

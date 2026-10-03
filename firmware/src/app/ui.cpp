@@ -1,7 +1,8 @@
 // Darstellung: Kopfzeile (Seitentitel, Seiten-Indikator, Uhrzeit) auf allen Seiten.
-// Seite 0: zwei Ring-Gauges (Session 5h, Woche 7d) mit Countdown, Prognose und
-// Tagesverlauf, Fußzeile mit Session-Dots und Datenstand bzw. Fehler.
+// Seite 0: zwei Ring-Gauges (Session 5h, Woche 7d) mit Countdown und Prognose,
+// Session-Zeile, Fußzeile mit Session-Dots und Datenstand bzw. Fehler.
 // Seiten 1/2: Session-Listen (Lokal, Remote) mit Status-Dot, Titel und Alter.
+// Getippte Session-Zeile bzw. Listenzeile wird kurz hervorgehoben (uiFlash).
 // Jeder Bereich wird nur neu gezeichnet, wenn sich sein Inhalt ändert; animierte
 // Dots einzeln, wenn ihre Phase wechselt.
 
@@ -39,6 +40,9 @@ static const float A_START = -135, A_END = 135;  // Grad, 0 = oben, im Uhrzeiger
 static const int SESS_Y = 186;                                     // Session-Zeile auf Seite 0
 static const int ROW_Y = 28, ROW_H = 26;                          // Listenzeilen
 static const int FOOT_DOTS = 24;
+static const int64_t WAIT_ALERT_S = 600;  // so lange wartet eine Session, bis die Zeit rot wird
+static const uint32_t FLASH_MS = 400;     // getippte Zeile so lange hervorheben
+static const uint32_t C_FLASH = 0x334155; // Hintergrund der getippten Zeile
 
 // Standardtitel; für Seite 1/2 kann der Host einen eigenen Titel mitschicken (list.l).
 static const char *const PAGE_TITLE[3] = {"Claude Usage", "Lokal", "Remote"};
@@ -57,6 +61,10 @@ static int16_t footX[FOOT_DOTS];
 static char footSt[FOOT_DOTS];
 static uint8_t footN = 0;
 static char rowSt[LIST_MAX];  // 0 = Zeile ohne Dot
+
+// Getippte Zeile (uiFlash) und was gerade hervorgehoben gezeichnet ist.
+static int gTapHit = HIT_NONE, gHl = HIT_NONE;
+static uint32_t gTapAt = 0;
 
 // --- Hilfsfunktionen -------------------------------------------------------
 
@@ -151,6 +159,15 @@ static void fmtAge(char *out, size_t n, int64_t t, int64_t now) {
   }
 }
 
+// Wartezeit für die Session-Zeile: "<1 min", "12 min", "3 h", "2 T"; leer = unbekannt.
+static void fmtWait(char *out, size_t n, int64_t since, int64_t now) {
+  if (since > 0 && now > 0 && now - since < 60) {
+    snprintf(out, n, "<1 min");
+  } else {
+    fmtAge(out, n, since, now);
+  }
+}
+
 // Kürzt buf auf maxW Pixel in der aktuellen Schrift von g, auf Wunsch mit "...".
 // buf braucht dann Platz für 3 weitere Zeichen.
 static void fitText(LovyanGFX &g, char *buf, int maxW, bool ellipsis) {
@@ -192,16 +209,19 @@ static void pushDot(int x, int y, int r, char st) {
 
 static char sessSt = 0;  // Status des Dots in der Session-Zeile (0 = nicht angezeigt)
 
-// Nur die Dots neu zeichnen, deren Phase gewechselt hat.
+// Nur die Dots neu zeichnen, deren Phase gewechselt hat (nicht in einer hervorgehobenen
+// Zeile: pushDot malt schwarzen Hintergrund).
 static void animateDots(bool pulse, bool blink) {
-  if ((sessSt == 'w' && pulse) || (sessSt == 'a' && blink)) pushDot(14, SESS_Y + BAR_H / 2, 5, sessSt);
+  if (gHl != HIT_SESSION && ((sessSt == 'w' && pulse) || (sessSt == 'a' && blink))) {
+    pushDot(14, SESS_Y + BAR_H / 2, 5, sessSt);
+  }
   for (int i = 0; i < footN; i++) {
     if ((footSt[i] == 'w' && pulse) || (footSt[i] == 'a' && blink)) {
       pushDot(footX[i], FOOTER_Y + BAR_H / 2, 4, footSt[i]);
     }
   }
   for (int i = 0; i < LIST_MAX; i++) {
-    if ((rowSt[i] == 'w' && pulse) || (rowSt[i] == 'a' && blink)) {
+    if (gHl != i && ((rowSt[i] == 'w' && pulse) || (rowSt[i] == 'a' && blink))) {
       pushDot(14, ROW_Y + ROW_H / 2 + i * ROW_H, 5, rowSt[i]);
     }
   }
@@ -298,9 +318,10 @@ static void renderGauge(int x, const char *title, const Window &w, const char *r
 }
 
 // Session-Zeile unter den Gauges: wartende Session (Vorrang) bzw. arbeitende, mit
-// animiertem Dot; weitere aktive Sessions als "+n" rechts. Ohne Angabe leer.
-static void renderSessionLine(const SessionLine &s) {
-  bar.fillSprite(C_BG);
+// animiertem Dot; rechts die Wartezeit (ab WAIT_ALERT_S rot) und weitere aktive Sessions
+// als "+n". Ohne Angabe leer. hl: hervorgehoben (gerade getippt).
+static void renderSessionLine(const SessionLine &s, const char *wait, bool alert, bool hl) {
+  bar.fillSprite(hl ? C_FLASH : C_BG);
   sessSt = s.st;
   bar.setFont(&fonts::FreeSans9pt7b);
   bar.setTextDatum(middle_left);
@@ -315,15 +336,20 @@ static void renderSessionLine(const SessionLine &s) {
     bar.drawString(prefix, 28, BAR_H / 2);
     const int x = 28 + bar.textWidth(prefix);
     int right = W - 8;
+    bar.setTextDatum(middle_right);
     if (s.more > 0) {
       char more[8];
       snprintf(more, sizeof more, "+%u", s.more);
-      bar.setTextDatum(middle_right);
       bar.setTextColor(C_DIM);
       bar.drawString(more, right, BAR_H / 2);
       right -= bar.textWidth(more) + 8;
-      bar.setTextDatum(middle_left);
     }
+    if (wait[0]) {
+      bar.setTextColor(alert ? C_RED : C_AMBER);
+      bar.drawString(wait, right, BAR_H / 2);
+      right -= bar.textWidth(wait) + 8;
+    }
+    bar.setTextDatum(middle_left);
     char name[sizeof s.name + 3];
     strlcpy(name, s.name, sizeof s.name);
     fitText(bar, name, right - x, true);
@@ -404,9 +430,9 @@ static void renderDotsFooter(const char *dots, const char *right) {
   bar.pushSprite(0, FOOTER_Y);
 }
 
-// Listenzeile i; it == nullptr = leere Zeile. right = Alter bzw. "wartet".
-static void renderRow(int i, const ListItem *it, const char *right) {
-  bar.fillSprite(C_BG);
+// Listenzeile i; it == nullptr = leere Zeile. right = Alter bzw. "wartet". hl: getippt.
+static void renderRow(int i, const ListItem *it, const char *right, bool hl) {
+  bar.fillSprite(hl ? C_FLASH : C_BG);
   rowSt[i] = it ? it->st : 0;
   if (it) {
     paintDot(bar, 14, ROW_H / 2, 5, it->st);
@@ -482,15 +508,38 @@ void uiSetBrightness(uint8_t level) {
   lcd.setBrightness(level);
 }
 
-bool uiTouched() {
-  uint16_t x, y;
-  return lcd.getTouch(&x, &y) > 0;
+bool uiTouch(int *x, int *y) {
+  uint16_t tx, ty;
+  if (lcd.getTouch(&tx, &ty) <= 0) return false;
+  *x = tx;
+  *y = ty;
+  return true;
+}
+
+// Öffnen lässt sich nur, was gerade zu sehen ist und laut Host einen Link hat (nicht z. B.
+// Terminal-Sessions): auf Seite 0 die Session-Zeile mit wartender bzw. arbeitender
+// Session, auf Seite 1/2 eine belegte Listenzeile. Alles andere wechselt die Seite.
+int uiHit(const ViewModel &vm, int x, int y) {
+  if (vm.screen != Screen::Usage || x < 0 || x >= W) return HIT_NONE;
+  if (vm.page == 0) {
+    const bool shown = (vm.sess.st == 'a' || vm.sess.st == 'w') && vm.sess.open;
+    return shown && y >= SESS_Y && y < SESS_Y + BAR_H ? HIT_SESSION : HIT_NONE;
+  }
+  const SessionList &l = vm.list[vm.page - 1];
+  if (y < ROW_Y) return HIT_NONE;
+  const int i = (y - ROW_Y) / ROW_H;
+  return i < l.n && i < LIST_MAX && l.item[i].open ? i : HIT_NONE;
+}
+
+void uiFlash(int hit) {
+  gTapHit = hit;
+  gTapAt = millis();
 }
 
 void uiRender(const ViewModel &vm) {
   static Screen lastScreen = (Screen)-1;
   static uint8_t lastPage = 255;
-  static char lastHeader[40], lastFooter[160], lastG[2][128], lastNotice[64], lastSess[64];
+  static char lastHeader[40], lastFooter[160], lastG[2][128], lastNotice[64], lastSess[80];
   static char lastRow[LIST_MAX][64], lastMode;
 
   // Animationsphase der Dots: w 600 ms an/gedimmt, a 300 ms an/aus.
@@ -499,6 +548,7 @@ void uiRender(const ViewModel &vm) {
   const bool pulseChanged = pulse != gPulseOn, blinkChanged = blink != gBlinkOn;
   gPulseOn = pulse;
   gBlinkOn = blink;
+  gHl = ms - gTapAt < FLASH_MS ? gTapHit : HIT_NONE;
 
   const bool full = vm.screen != lastScreen || vm.page != lastPage;
   if (full) {
@@ -542,11 +592,14 @@ void uiRender(const ViewModel &vm) {
         renderGauge(k * GW, TITLE[k], *win[k], reset, fc, fcColor);
       }
     }
-    char sess[sizeof lastSess];
-    snprintf(sess, sizeof sess, "%c|%u|%s", vm.sess.st ? vm.sess.st : '-', vm.sess.more, vm.sess.name);
+    char wait[12] = "", sess[sizeof lastSess];
+    if (vm.sess.st == 'a') fmtWait(wait, sizeof wait, vm.sess.since, vm.now);
+    const bool alert = wait[0] && vm.now - vm.sess.since >= WAIT_ALERT_S;
+    snprintf(sess, sizeof sess, "%c|%u|%s|%d%d|%s", vm.sess.st ? vm.sess.st : '-', vm.sess.more,
+             wait, alert, gHl == HIT_SESSION, vm.sess.name);
     if (strcmp(sess, lastSess) != 0) {
       strcpy(lastSess, sess);
-      renderSessionLine(vm.sess);
+      renderSessionLine(vm.sess, wait, alert, gHl == HIT_SESSION);
     }
     if (vm.err[0]) {
       snprintf(footText, sizeof footText, "%s", vm.err);
@@ -580,11 +633,11 @@ void uiRender(const ViewModel &vm) {
         } else {
           fmtAge(right, sizeof right, it->act, vm.now);
         }
-        snprintf(sig, sizeof sig, "%c|%s|%s", it->st, right, it->name);
+        snprintf(sig, sizeof sig, "%c|%s|%d|%s", it->st, right, gHl == i, it->name);
       }
       if (strcmp(sig, lastRow[i]) != 0) {
         strcpy(lastRow[i], sig);
-        renderRow(i, it, right);
+        renderRow(i, it, right, it && gHl == i);
       }
     }
     if (l.err[0]) {

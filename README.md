@@ -14,8 +14,9 @@ Remote Control list     ─┘    PowerShell 7)
 - **Host:** `host/collector.ps1` fetches the usage every 2 minutes, reads the state of the
   local sessions every 2 s and the Remote Control sessions of other machines every 30 s.
   It computes a forecast and sends everything to the display.
-- **Display:** three pages, tap to switch (Home → Local → Remote), back to Home after
-  60 s without a tap. Full brightness; the backlight turns off while Windows is locked.
+- **Display:** three pages (Home → Local → Remote), back to Home after 60 s without a tap.
+  Tap a session to open it on the PC; tap anywhere else to switch pages. Full brightness;
+  the backlight turns off while Windows is locked.
 
 > **Made for the Claude Desktop app on Windows (Code tab).** This project is not meant
 > for setups that only use the Claude Code CLI in a terminal; for those, Claude Code's
@@ -245,7 +246,7 @@ internally. It briefly starts the Claude CLI in headless mode
 │  │Session │          │ Woche  │        │  yellow around 80 %, red from 95 %
 │ Reset 3 h 14 min      Reset 3 T 2 h    │
 │ Limit ca. 13:40     ca. 38 % bis Reset │  forecast
-│ ● wartet: API client refactoring    +1 │  session line
+│ ● wartet: API client refa... 12 min +1 │  session line
 │ ● ● | ● ● ●                Stand 11:35 │  dots: one per running session
 └────────────────────────────────────────┘
 ```
@@ -260,6 +261,7 @@ internally. It briefly starts the Claude CLI in headless mode
   the window started; before that it would be too jumpy.
 - **Session line:** the session that is waiting for you (orange, "wartet: …" = waiting),
   otherwise the one that is working (green, "arbeitet: …" = working), with its title;
+  for a waiting session also how long it has been waiting ("12 min", red after 10 min);
   "+1" etc. counts further active sessions. Local and remote sessions both count. If all
   running sessions are idle it says "alle Sessions idle"; without running sessions it is empty.
 - **Dots:** local sessions on the left, connected remote sessions after the separator.
@@ -273,6 +275,11 @@ internally. It briefly starts the Claude CLI in headless mode
 as above, hollow ring = offline/ended), title and age of the last activity ("5 min",
 "3 h", "2 T" = 2 days; for waiting sessions "wartet" = waiting). At the bottom a summary,
 e.g. "1 arbeitet, 4 idle" (1 working, 4 idle).
+
+**Tap to open:** tapping the session line (page 0) or a list row (pages 1/2) opens that
+session on the PC: local Claude Desktop sessions in the app, remote sessions on
+claude.ai/code in the browser. The row lights up briefly. Terminal sessions cannot be
+opened; tapping them, the header, the footer or an empty area switches to the next page.
 
 - **"Warte auf Daten"** (waiting for data): the display has not received anything from
   the host since it started.
@@ -319,7 +326,7 @@ nothing else.
 ```json
 {"t":"state","now":1790975844,"tz":120,
  "s":{"p":17.0,"r":1791031800,"f":1790990400},"w":{"p":24.0,"r":1791284400,"f":0,"e":44},
- "at":1790975800,"lock":0,"d":"w|aiii","x":{"s":"a","n":"API client refactoring","m":1}}
+ "at":1790975800,"lock":0,"d":"w|aiii","x":{"s":"a","n":"API client refactoring","m":1,"t":1790975100,"o":1}}
 ```
 
 | Field | Meaning |
@@ -331,24 +338,26 @@ nothing else.
 | `err` | Short error text for the footer (ASCII, max. 44 characters). Missing when all is well |
 | `lock` | `1` = Windows locked → backlight off (also stays in effect while offline) |
 | `d` | Dots: one character per running session, `w` working, `a` waiting, `i` idle; local first, then `\|`, then remote (max. 24) |
-| `x` | Session line: `s` = `a` waiting / `w` working / `i` all idle, `n` = title (ASCII, max. 40), `m` = number of further active sessions. Missing = no running sessions |
+| `x` | Session line: `s` = `a` waiting / `w` working / `i` all idle, `n` = title (ASCII, max. 40), `m` = number of further active sessions, `t` = waiting since (Unix s, only for `a`), `o` = `1` if it can be opened on the PC. Missing = no running sessions |
 
 `list`: session list for page `p` (1 = local, 2 = remote), on change and after `hello`.
 
 ```json
-{"t":"list","p":2,"at":1790975800,"l":"my-server","i":[{"n":"Refactoring API client","s":"i","a":1790890000}]}
+{"t":"list","p":2,"at":1790975800,"l":"my-server","i":[{"n":"Refactoring API client","s":"i","a":1790890000,"o":1}]}
 ```
 
 Max. 7 entries, newest first. `n` = title (max. 40 characters), `s` = `w` working,
-`a` waiting, `i` idle, `o` offline/ended, `a` = last activity (Unix s). Optional `err`
+`a` waiting, `i` idle, `o` offline/ended, `a` = last activity (Unix s), `o` = `1` if the
+session can be opened on the PC (not for terminal sessions). Optional `err`
 (error while fetching) and `l` (custom page title, max. 14 characters).
 
 **Display → host**
 
 | Message | When |
 |---|---|
-| `{"t":"hello","fw":"2.4.0"}` | After start-up. The host immediately sends `state` and both `list` |
+| `{"t":"hello","fw":"2.5.0"}` | After start-up. The host immediately sends `state` and both `list` |
 | `{"t":"ack","s":17.0,"w":24.0,"b":255}` | After every `state`: the accepted values and the target brightness `b` (255, or 0 while locked) |
+| `{"t":"open","p":1,"i":2,"n":"Refactoring API client","x":160,"y":95}` | A session was tapped: page `p`, row `i` (`-1` = session line), shown title `n`, tap position `x`/`y`. The host takes row `i` of the list it last sent if the title matches (otherwise it searches by title) and opens `claude://claude.ai/epitaxy/<id>` (local) or `https://claude.ai/code/<id>` (remote). It logs page, row and position, never the title |
 
 **Timing:** usage every 120 s (in the background), local sessions every 2 s (Claude Desktop
 session files every 4 s), remote list every 30 s, lock
