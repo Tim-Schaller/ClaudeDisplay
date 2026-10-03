@@ -310,7 +310,7 @@ function Get-DesktopSessions([hashtable]$Cache) {
   return @($byId.Values)
 }
 
-# Liste Seite 2: Desktop-Sessions und laufende Terminal-Sessions. Status aus der laufenden
+# Liste Seite 1 (lokal): Desktop-Sessions und laufende Terminal-Sessions. Status aus der laufenden
 # Registry-Session (hostSessionId == sessionId), sonst offline.
 function Get-LocalItems($Desktop, $Local) {
   $running = @{}
@@ -556,7 +556,7 @@ $Labels = @{ 1 = ''; 2 = '' }
 $FixedPort = ''
 try {
   $cfg = [IO.File]::ReadAllText($ConfigFile) | ConvertFrom-Json
-  foreach ($p in @{ 1 = 'remoteLabel'; 2 = 'localLabel' }.GetEnumerator()) {
+  foreach ($p in @{ 1 = 'localLabel'; 2 = 'remoteLabel' }.GetEnumerator()) {
     $v = ConvertTo-DisplayTitle ([string]$cfg.($p.Value))
     if ($v) { $Labels[$p.Key] = $v.Substring(0, [Math]::Min(14, $v.Length)) }
   }
@@ -665,9 +665,9 @@ try {
       }
 
       if ($localDirty) {
-        Update-Line 'l2' (Get-ListLine 2 (Get-LocalItems $desktopSessions $localSessions) ([DateTimeOffset]::UtcNow.ToUnixTimeSeconds()) '')
+        Update-Line 'l1' (Get-ListLine 1 (Get-LocalItems $desktopSessions $localSessions) ([DateTimeOffset]::UtcNow.ToUnixTimeSeconds()) '')
       }
-      if ($remoteDirty) { Update-Line 'l1' (Get-ListLine 1 $remote $remoteAt $remoteErr) }
+      if ($remoteDirty) { Update-Line 'l2' (Get-ListLine 2 $remote $remoteAt $remoteErr) }
       if ($localDirty -or $remoteDirty) {
         $d = Get-Dots $localSessions $remote
         if ($d -ne $dots) { $dots = $d; $nextSend = [DateTime]::UtcNow }

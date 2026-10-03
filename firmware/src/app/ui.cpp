@@ -1,7 +1,7 @@
 // Darstellung: Kopfzeile (Seitentitel, Seiten-Indikator, Uhrzeit) auf allen Seiten.
 // Seite 0: zwei Ring-Gauges (Session 5h, Woche 7d) mit Countdown, Prognose und
 // Tagesverlauf, Fußzeile mit Session-Dots und Datenstand bzw. Fehler.
-// Seiten 1/2: Session-Listen (Remote, Lokal) mit Status-Dot, Titel und Alter.
+// Seiten 1/2: Session-Listen (Lokal, Remote) mit Status-Dot, Titel und Alter.
 // Jeder Bereich wird nur neu gezeichnet, wenn sich sein Inhalt ändert; animierte
 // Dots einzeln, wenn ihre Phase wechselt.
 
@@ -41,7 +41,7 @@ static const int ROW_Y = 28, ROW_H = 26;                          // Listenzeile
 static const int FOOT_DOTS = 24;
 
 // Standardtitel; für Seite 1/2 kann der Host einen eigenen Titel mitschicken (list.l).
-static const char *const PAGE_TITLE[3] = {"Claude Usage", "Remote", "Lokal"};
+static const char *const PAGE_TITLE[3] = {"Claude Usage", "Lokal", "Remote"};
 
 static const char *pageTitle(const ViewModel &vm) {
   if (vm.page > 0 && vm.list[vm.page - 1].label[0]) return vm.list[vm.page - 1].label;

@@ -6,8 +6,8 @@
     und startet ihn
   - meldet die Claude-CLI an, falls nötig (Browser-Login, einmalig)
   Mehrfach ausführen ist unschädlich (aktualisiert Script und Task).
-  -RemoteLabel / -LocalLabel: eigene Titel für Seite 1 (Sessions anderer Rechner,
-  Standard "Remote") und Seite 2 (dieser Rechner, Standard "Lokal"), max. 14 Zeichen.
+  -LocalLabel / -RemoteLabel: eigene Titel für Seite 1 (dieser Rechner, Standard "Lokal")
+  und Seite 2 (Sessions anderer Rechner, Standard "Remote"), max. 14 Zeichen.
   Sie werden in config.json gespeichert und bleiben bei späteren Installationen erhalten.
   -Port: fester COM-Port des Displays (z. B. COM7) statt der automatischen Suche, ebenfalls
   in config.json; -Port '' schaltet wieder auf automatisch.
@@ -44,7 +44,7 @@ if ($PSBoundParameters.ContainsKey('RemoteLabel') -or $PSBoundParameters.Contain
   }
   $cfg | ConvertTo-Json | Set-Content -Path $ConfigFile -Encoding utf8
   $p = if ($cfg.port) { $cfg.port } else { 'automatisch' }
-  Write-Host "Einstellungen gespeichert: Remote='$($cfg.remoteLabel)', Lokal='$($cfg.localLabel)', Port: $p"
+  Write-Host "Einstellungen gespeichert: Lokal='$($cfg.localLabel)', Remote='$($cfg.remoteLabel)', Port: $p"
 }
 . (Join-Path $PSScriptRoot 'claude-cli.ps1')
 

@@ -39,7 +39,7 @@ enum class Screen { Waiting, Usage, Offline };  // Usage = Daten aktuell (alle S
 
 struct ViewModel {
   Screen screen = Screen::Waiting;
-  uint8_t page = 0;  // 0 Usage, 1 Remote (andere Rechner), 2 Lokal (dieser Rechner)
+  uint8_t page = 0;  // 0 Usage, 1 Lokal (dieser Rechner), 2 Remote (andere Rechner)
   Window session, week;
   int64_t now = 0;        // aktuelle Unix-Zeit, 0 = noch keine Uhrzeit vom Host
   int tzMin = 0;          // lokaler UTC-Offset in Minuten (inkl. Sommerzeit)
@@ -48,7 +48,7 @@ struct ViewModel {
   const char *dots = "";  // ein Zeichen je laufender Session (w/a/i), '|' trennt lokal/Remote
   uint32_t offlineSecs = 0;
   Series hist[2];       // 0 Session, 1 Woche
-  SessionList list[2];  // Seite 1 (Remote), Seite 2 (Lokal)
+  SessionList list[2];  // Seite 1 (Lokal), Seite 2 (Remote)
 };
 
 void uiBegin(const char *fwVersion);

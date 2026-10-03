@@ -14,7 +14,7 @@ Remote Control list     ─┘    PowerShell 7)
 - **Host:** `host/collector.ps1` fetches the usage every 2 minutes, reads the state of the
   local sessions every 2 s and the Remote Control sessions of other machines every 30 s.
   It keeps a history for the chart and the forecast and sends everything to the display.
-- **Display:** three pages, tap to switch (Home → Remote → Local), back to Home after
+- **Display:** three pages, tap to switch (Home → Local → Remote), back to Home after
   60 s without a tap. Brightness follows the light sensor; the backlight turns off while
   Windows is locked.
 
@@ -120,12 +120,12 @@ Optional parameters, e.g. your own page titles (max. 14 characters) such as the 
 server the remote sessions run on:
 
 ```powershell
-pwsh -NoProfile -ExecutionPolicy Bypass -File .\host\install.ps1 -RemoteLabel "my-server" -LocalLabel "Laptop"
+pwsh -NoProfile -ExecutionPolicy Bypass -File .\host\install.ps1 -LocalLabel "Laptop" -RemoteLabel "my-server"
 ```
 
 | Parameter | Effect |
 |---|---|
-| `-RemoteLabel`, `-LocalLabel` | Title of page 1 and 2 (default "Remote" / "Lokal"); `""` restores the default |
+| `-LocalLabel`, `-RemoteLabel` | Title of page 1 and 2 (default "Lokal" / "Remote"); `""` restores the default |
 | `-Port COMx` | Use a fixed COM port instead of searching; `""` switches back to automatic |
 | `-NoLogin` | Do not start the CLI login |
 
@@ -165,24 +165,24 @@ internally. It briefly starts the Claude CLI in headless mode
   the display shows the collector's error message in the footer.
 
 **Session status:**
-- **Local (page 2):** every running Claude Code session (desktop app and terminal) keeps
+- **Local (page 1):** every running Claude Code session (desktop app and terminal) keeps
   `~\.claude\sessions\<pid>.json` up to date with `busy` / `waiting` / `idle`. The
   collector only reads these `.json` files (never the `.key` files) and checks PID and
   start time. Title and last activity of desktop sessions come from their session files
   (`…\Claude\claude-code-sessions`). Regular chats from the Chat tab cannot be read
   locally and are not shown.
-- **Remote (page 1):** sessions on other machines (e.g. a server running Claude Code in a
+- **Remote (page 2):** sessions on other machines (e.g. a server running Claude Code in a
   terminal) appear when **Remote Control** is enabled there (`/config` → "Enable Remote
   Control for all sessions", or `claude --remote-control`). Each session then registers
   with Anthropic, and the collector fetches the list from
   `GET https://api.anthropic.com/v1/code/sessions`, without any network connection to the
   other machine. To do so it **reads** the CLI's access token from `.credentials.json`:
   read-only, never logged, never refreshed (the CLI does that during the `get_usage` runs)
-  and never sent to the display. Strictly speaking, page 1 shows all non-archived sessions
+  and never sent to the display. Strictly speaking, page 2 shows all non-archived sessions
   from that list that cannot be matched to a session on this machine, including ended
   ones (hollow ring). If you don't use Remote Control anywhere, you will mostly see older
   sessions of your own there. The interface is internal and undocumented; if it breaks,
-  page 1 shows an error and everything else keeps working.
+  page 2 shows an error and everything else keeps working.
 - Only titles, status and times are shown, never chat content.
 
 ## Display
@@ -215,7 +215,7 @@ internally. It briefly starts the Claude CLI in headless mode
   Pulsing green = working, fast-blinking orange = waiting for you (permission or
   question), gray = idle.
 
-**Pages 1 (Remote) and 2 (Local, "Lokal"):** the last 7 sessions with a status dot (colors
+**Pages 1 (Local, "Lokal") and 2 (Remote):** the last 7 sessions with a status dot (colors
 as above, hollow ring = offline/ended), title and age of the last activity ("5 min",
 "3 h", "2 T" = 2 days; for waiting sessions "wartet" = waiting). At the bottom a summary,
 e.g. "1 arbeitet, 4 idle" (1 working, 4 idle).
@@ -288,10 +288,10 @@ nothing else.
 
 `day` = local start of the day 00:00 (Unix s), `v` = 96 values of 15 min each (0–100, `-1` = no data).
 
-`list`: session list for page `p` (1 = remote, 2 = local), on change and after `hello`.
+`list`: session list for page `p` (1 = local, 2 = remote), on change and after `hello`.
 
 ```json
-{"t":"list","p":1,"at":1790975800,"l":"my-server","i":[{"n":"Refactoring API client","s":"i","a":1790890000}]}
+{"t":"list","p":2,"at":1790975800,"l":"my-server","i":[{"n":"Refactoring API client","s":"i","a":1790890000}]}
 ```
 
 Max. 7 entries, newest first. `n` = title (max. 40 characters), `s` = `w` working,
@@ -302,7 +302,7 @@ Max. 7 entries, newest first. `n` = title (max. 40 characters), `s` = `w` workin
 
 | Message | When |
 |---|---|
-| `{"t":"hello","fw":"2.1.0"}` | After start-up. The host immediately sends `state`, both `hist` and both `list` |
+| `{"t":"hello","fw":"2.2.0"}` | After start-up. The host immediately sends `state`, both `hist` and both `list` |
 | `{"t":"ack","s":17.0,"w":24.0,"b":255,"l":0}` | After every `state`: the accepted values, target brightness `b` (0–255), raw light sensor value `l` |
 
 **Timing:** usage every 120 s, local sessions every 2 s, remote list every 30 s, lock

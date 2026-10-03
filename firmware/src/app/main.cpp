@@ -7,7 +7,7 @@
 
 #include "ui.h"
 
-static const char *FW_VERSION = "2.1.0";
+static const char *FW_VERSION = "2.2.0";
 static const uint32_t OFFLINE_AFTER_MS = 90000;
 static const uint32_t FRAME_MS = 40;            // Bildaufbau (Dot-Animation braucht < 300 ms)
 static const uint32_t TAP_GAP_MS = 300;         // Entprellung: so lange vorher keine Berührung
