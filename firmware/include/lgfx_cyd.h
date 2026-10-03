@@ -10,6 +10,8 @@
 //   ROTATION      Bildschirmausrichtung (1 = Querformat; 3 = um 180° gedreht)
 //   PANEL_INVERT  1 = Farben invertieren (Hintergrund erscheint sonst weiß)
 //   PANEL_SWAP_RB 1 = Rot und Blau tauschen (RGB- statt BGR-Reihenfolge)
+//   TOUCH_ROTATION Lage des Touch zum Panel (LovyanGFX offset_rotation; 4 = vertikal
+//                 gespiegelt, so beim getesteten Board; Tipps landen sonst oben/unten vertauscht)
 
 #ifndef ROTATION
 #define ROTATION 1
@@ -19,6 +21,9 @@
 #endif
 #ifndef PANEL_SWAP_RB
 #define PANEL_SWAP_RB 0
+#endif
+#ifndef TOUCH_ROTATION
+#define TOUCH_ROTATION 4
 #endif
 
 #define LGFX_USE_V1
@@ -96,7 +101,7 @@ public:
       cfg.x_max = 3900;
       cfg.y_min = 300;
       cfg.y_max = 3900;
-      cfg.offset_rotation = 0;
+      cfg.offset_rotation = TOUCH_ROTATION;
       _touch.config(cfg);
       _panel.setTouch(&_touch);
     }

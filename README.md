@@ -134,6 +134,7 @@ apply to the app in the same way (set them before building and keep them for the
 | White background, negative colors | `$env:PLATFORMIO_BUILD_FLAGS = "-DPANEL_INVERT=1"` |
 | Red and blue swapped | `$env:PLATFORMIO_BUILD_FLAGS = "-DPANEL_SWAP_RB=1"` |
 | Image rotated or mirrored | `$env:PLATFORMIO_BUILD_FLAGS = "-DROTATION=3"` (0–3 rotated, 4–7 mirrored; default 1) |
+| Taps land upside down or in the wrong row | `$env:PLATFORMIO_BUILD_FLAGS = "-DTOUCH_ROTATION=0"` (touch orientation relative to the panel, 0–7; default 4 = vertically flipped). Each tap that opens a session is logged with its position |
 
 Combine several flags with spaces, e.g. `"-DPANEL_INVERT=1 -DROTATION=3"`.
 
