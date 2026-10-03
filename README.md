@@ -54,6 +54,30 @@ Remote Control list     ─┘    PowerShell 7)
 | `host/install.ps1` | Sets up autostart (Task Scheduler, no admin) and signs in the CLI |
 | `host/uninstall.ps1` | Undoes everything |
 
+## Quick start with the prebuilt release
+
+No PlatformIO needed. From the [latest release](https://github.com/Tim-Schaller/ClaudeDisplay/releases/latest)
+download the source code ZIP and the firmware image for your board:
+
+| Image | For |
+|---|---|
+| `claude-display-st7789-vX.Y.Z.bin` | Dual-USB revision (ST7789 panel) |
+| `claude-display-ili9341-vX.Y.Z.bin` | Original revision (ILI9341 panel) |
+| `test-st7789-vX.Y.Z.bin`, `test-ili9341-vX.Y.Z.bin` | Test image to find out which panel you have (see setup step 2) |
+
+Each image contains bootloader, partition table and app and is written to address `0x0`:
+
+- **In the browser** (Chrome or Edge): open the [Espressif web flasher](https://espressif.github.io/esptool-js/),
+  connect at 460800 baud, add the file at flash address `0x0` and click "Program".
+- **Or with esptool:** `py -m pip install esptool`, then
+  `py -m esptool --chip esp32 --port COMx --baud 460800 write_flash 0x0 claude-display-st7789-vX.Y.Z.bin`.
+
+Flashing overwrites the demo program that came with the board; to keep it, back it up first
+(setup step 1; with plain esptool: `py -m esptool --chip esp32 --port COMx --baud 460800 read_flash 0 ALL original-firmware.bin`).
+Then continue with setup step 4 (install the host part) from the unpacked source code ZIP.
+If the image looks wrong (inverted colors, swapped red/blue, rotated), build the firmware
+yourself with the build flags from setup step 2.
+
 ## Setup
 
 Run all commands in PowerShell 7 from the project folder (root of this repo); `-d firmware`
