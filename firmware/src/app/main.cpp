@@ -1,6 +1,6 @@
 // Claude-Usage-Display: empfängt Usage-Stand, Session-Status und Session-Listen als
 // NDJSON über USB-Serial (115200 Baud) und zeigt sie an. Tippen auf eine Session bittet
-// den Host, sie am PC zu öffnen; Tippen woanders wechselt die Seite.
+// den Host, sie am PC zu öffnen; seitwärts wischen oder woanders tippen wechselt die Seite.
 // Protokoll: siehe README.md, Abschnitt "Protokoll".
 
 #include <Arduino.h>
@@ -11,7 +11,8 @@
 static const char *FW_VERSION = "2.5.0";
 static const uint32_t OFFLINE_AFTER_MS = 90000;
 static const uint32_t FRAME_MS = 40;            // Bildaufbau (Dot-Animation braucht < 300 ms)
-static const uint32_t TAP_GAP_MS = 300;         // Entprellung: so lange vorher keine Berührung
+static const uint32_t RELEASE_MS = 100;         // so lange ohne Kontakt = losgelassen
+static const int SWIPE_PX = 50;                 // waagrechter Weg für einen Wisch
 static const uint32_t PAGE_TIMEOUT_MS = 60000;  // ohne Touch zurück auf Seite 0
 static const uint32_t FADE_MS = 1000;
 
@@ -30,7 +31,7 @@ static uint32_t hostEpochMs = 0;  // ... und wann sie ankam
 static bool locked = false;  // Windows-Sitzung gesperrt (bleibt auch offline erhalten)
 
 static uint8_t page = 0;
-static uint32_t lastTouchMs = 0, lastTapMs = 0;
+static uint32_t lastTapMs = 0;  // letzte Geste (für PAGE_TIMEOUT_MS)
 
 static int64_t nowEpoch() {
   return hostEpoch > 0 ? hostEpoch + (int64_t)((millis() - hostEpochMs) / 1000) : 0;
@@ -173,31 +174,52 @@ static void sendOpen(int hit, const char *name, int x, int y) {
   Serial.print('\n');
 }
 
-// Tippen auf eine Session (Session-Zeile bzw. Listenzeile) = am PC öffnen, sonst nächste
-// Seite. Als neuer Tipp zählt eine Berührung erst, wenn die letzte Abfrage keine sah
-// (Flanke; ein langer Redraw dazwischen zählt nicht als Loslassen) und vorher 300 ms lang
-// keine war (Entprellung). Bei aus geschaltetem Display ignorieren.
+// Gesten, ausgewertet beim Loslassen: waagrecht wischen = Seite wechseln (nach links die
+// nächste, nach rechts die vorige); tippen (kaum Bewegung) auf eine Session = am PC öffnen,
+// sonst nächste Seite; anders gewischt = nichts. Losgelassen ist erst nach RELEASE_MS ohne
+// Kontakt, gerechnet ab der ersten Abfrage ohne Kontakt (der Touch meldet beim Drücken
+// einzelne Aussetzer; ein langer Redraw dazwischen zählt nicht als Loslassen).
+// Bei ausgeschaltetem Display ignorieren.
 static void pollTouch() {
-  static uint32_t lastPoll = 0;
-  static bool wasTouched = false;
+  static uint32_t lastPoll = 0, upAt = 0;
+  static bool down = false, up = false;
+  static int x0 = 0, y0 = 0, x1 = 0, y1 = 0;  // Start- und letzte Position
   if (millis() - lastPoll < 20) return;
   lastPoll = millis();
-  int x = 0, y = 0;
-  const bool touched = uiTouch(&x, &y);
-  const bool edge = touched && !wasTouched;
-  wasTouched = touched;
-  if (!touched) return;
-  const bool fresh = edge && millis() - lastTouchMs > TAP_GAP_MS;
-  lastTouchMs = millis();
-  if (!fresh || targetBrightness() == 0) return;
+  int x, y;
+  if (uiTouch(&x, &y)) {
+    if (!down) {
+      x0 = x;
+      y0 = y;
+    }
+    x1 = x;
+    y1 = y;
+    down = true;
+    up = false;
+    return;
+  }
+  if (!down) return;
+  if (!up) {
+    up = true;
+    upAt = millis();
+  }
+  if (millis() - upAt < RELEASE_MS) return;
+  down = up = false;
+  if (targetBrightness() == 0) return;
   lastTapMs = millis();
+  const int dx = x1 - x0, dy = y1 - y0;
+  if (abs(dx) >= SWIPE_PX && abs(dx) > 2 * abs(dy)) {
+    page = (page + (dx < 0 ? 1 : 2)) % 3;
+    return;
+  }
+  if (abs(dx) >= SWIPE_PX || abs(dy) >= SWIPE_PX) return;
   vm.page = page;  // uiHit prüft gegen die angezeigte Seite
-  const int hit = uiHit(vm, x, y);
+  const int hit = uiHit(vm, x0, y0);
   if (hit == HIT_NONE) {
     page = (page + 1) % 3;
     return;
   }
-  sendOpen(hit, hit == HIT_SESSION ? vm.sess.name : vm.list[page - 1].item[hit].name, x, y);
+  sendOpen(hit, hit == HIT_SESSION ? vm.sess.name : vm.list[page - 1].item[hit].name, x0, y0);
   uiFlash(hit);
 }
 

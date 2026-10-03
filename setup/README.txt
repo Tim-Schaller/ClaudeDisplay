@@ -21,8 +21,8 @@ Install
    background service (one-time browser login to Claude).
 
 Use
-- Tap a session on the display to open it on the PC; tap anywhere else to switch
-  pages: Home -> Local -> Remote.
+- Tap a session on the display to open it in Claude Desktop; swipe sideways (or tap
+  anywhere else) to switch pages: Home -> Local -> Remote.
 - The display texts are in German ("Warte auf Daten" = waiting for data).
 
 Uninstall

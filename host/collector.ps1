@@ -16,8 +16,8 @@
     oder hello binnen 6 s); sonst wird er wieder geschlossen und 10 min übersprungen.
   - Hält den Port offen und sendet als NDJSON: state sofort bei Änderung und alle 30 s
     (Heartbeat + Uhrzeit, Dots, Session-Zeile), list bei Änderung. Nach dem Verbinden bzw. hello alles einmal.
-  - Tippt man am Display auf eine Session (open), öffnet er sie: lokale in Claude Desktop,
-    Remote-Sessions auf claude.ai/code.
+  - Tippt man am Display auf eine Session (open), öffnet er sie in Claude Desktop (lokale
+    und Remote-Sessions).
   - Übersteht Ab- und Anstecken; schreibt ein knappes Log nach collector.log
     (nie Session-Titel, nie Token).
 #>
@@ -419,8 +419,8 @@ function Get-SessionLine($LocalItems, $Remote) {
   return $x
 }
 
-# Tippen auf eine Session am Display: lokale in Claude Desktop öffnen (Deep-Link der App),
-# Remote-Sessions auf claude.ai/code im Browser. Das Board schickt Seite, Zeile und
+# Tippen auf eine Session am Display: in Claude Desktop öffnen (Deep-Links der App, auch für
+# Remote-Sessions). Das Board schickt Seite, Zeile und
 # angezeigten Titel. Auf Seite 1/2 gilt die Zeile der zuletzt gebauten Liste, wenn der Titel
 # passt; sonst (Liste inzwischen geändert) wird nach dem Titel gesucht, bei gleichem Titel die
 # wartende bzw. zuletzt aktive. Ins Log nur Seite, Zeile und Tipp-Position, nie den Titel.
@@ -446,9 +446,10 @@ function Open-Session($Msg, $Shown, $LocalItems, $Remote) {
   $where = "Seite $p, Zeile $i, Tipp bei $($Msg.x)/$($Msg.y)"
   if (-not $hit) { Write-Log "Display: Session nicht gefunden ($where)"; return }
   if (-not (Test-Openable $hit)) { Write-Log "Display: Session laesst sich nicht oeffnen, z. B. Terminal ($where)"; return }
-  # Remote-IDs kommen teils als cse_..., die Web-Adresse nutzt session_... (gleicher Rest).
+  # Remote: Claude Desktop öffnet claude://claude.ai/code/<id> in seiner Ansicht für Remote-
+  # Control-Sessions. Die API liefert cse_..., Links nutzen session_... (gleicher Rest).
   $url = if ($hit.Id -like 'local_*') { "claude://claude.ai/epitaxy/$($hit.Id)" }
-  else { 'https://claude.ai/code/' + ($hit.Id -replace '^cse_', 'session_') }
+  else { 'claude://claude.ai/code/' + ($hit.Id -replace '^cse_', 'session_') }
   Start-Process $url
   Write-Log "Display: Session geoeffnet ($where)"
 }

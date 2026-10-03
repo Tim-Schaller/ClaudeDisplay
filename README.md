@@ -15,7 +15,8 @@ Remote Control list     ─┘    PowerShell 7)
   local sessions every 2 s and the Remote Control sessions of other machines every 30 s.
   It computes a forecast and sends everything to the display.
 - **Display:** three pages (Home → Local → Remote), back to Home after 60 s without a tap.
-  Tap a session to open it on the PC; tap anywhere else to switch pages. Full brightness;
+  Tap a session to open it in Claude Desktop; swipe sideways (or tap anywhere else) to
+  switch pages. Full brightness;
   the backlight turns off while Windows is locked.
 
 > **Made for the Claude Desktop app on Windows (Code tab).** This project is not meant
@@ -278,9 +279,11 @@ as above, hollow ring = offline/ended), title and age of the last activity ("5 m
 e.g. "1 arbeitet, 4 idle" (1 working, 4 idle).
 
 **Tap to open:** tapping the session line (page 0) or a list row (pages 1/2) opens that
-session on the PC: local Claude Desktop sessions in the app, remote sessions on
-claude.ai/code in the browser. The row lights up briefly. Terminal sessions cannot be
+session in Claude Desktop, local and remote sessions alike (remote ones in the app's view
+for Remote Control sessions). The row lights up briefly. Terminal sessions cannot be
 opened; tapping them, the header, the footer or an empty area switches to the next page.
+
+**Switching pages:** swipe left for the next page, right for the previous one.
 
 - **"Warte auf Daten"** (waiting for data): the display has not received anything from
   the host since it started.
@@ -358,7 +361,7 @@ session can be opened on the PC (not for terminal sessions). Optional `err`
 |---|---|
 | `{"t":"hello","fw":"2.5.0"}` | After start-up. The host immediately sends `state` and both `list` |
 | `{"t":"ack","s":17.0,"w":24.0,"b":255}` | After every `state`: the accepted values and the target brightness `b` (255, or 0 while locked) |
-| `{"t":"open","p":1,"i":2,"n":"Refactoring API client","x":160,"y":95}` | A session was tapped: page `p`, row `i` (`-1` = session line), shown title `n`, tap position `x`/`y`. The host takes row `i` of the list it last sent if the title matches (otherwise it searches by title) and opens `claude://claude.ai/epitaxy/<id>` (local) or `https://claude.ai/code/<id>` (remote). It logs page, row and position, never the title |
+| `{"t":"open","p":1,"i":2,"n":"Refactoring API client","x":160,"y":95}` | A session was tapped: page `p`, row `i` (`-1` = session line), shown title `n`, tap position `x`/`y`. The host takes row `i` of the list it last sent if the title matches (otherwise it searches by title) and opens `claude://claude.ai/epitaxy/<id>` (local) or `claude://claude.ai/code/<id>` (remote, `cse_` becomes `session_`) in Claude Desktop. It logs page, row and position, never the title |
 
 **Timing:** usage every 120 s (in the background), local sessions every 2 s (Claude Desktop
 session files every 4 s), remote list every 30 s, lock
