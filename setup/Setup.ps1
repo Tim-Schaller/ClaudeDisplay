@@ -1,4 +1,4 @@
-<#
+﻿<#
   Claude-Usage-Display: Einrichtung in einem Schritt (aus dem Release-ZIP, Setup.cmd).
   - prüft Claude Desktop und PowerShell 7 (bietet die Installation an)
   - findet das CYD am USB-Port
