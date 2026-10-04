@@ -23,7 +23,7 @@ Install
 Use
 - Tap a session on the display to open it in Claude Desktop; swipe sideways (or tap
   anywhere else) to switch pages: Home -> Local -> Remote.
-- The display texts are in German ("Warte auf Daten" = waiting for data).
+- Unofficial project, not affiliated with Anthropic; Claude is a trademark of Anthropic.
 
 Uninstall
 - Double-click Uninstall.cmd. The firmware stays on the board; a backup of the

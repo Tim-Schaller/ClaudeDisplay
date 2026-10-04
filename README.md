@@ -1,8 +1,20 @@
-# Claude-Usage-Display
+<p align="center">
+  <img src="docs/images/logo.svg" width="120" alt="Claude-Usage-Display logo">
+</p>
 
-Shows your Claude usage (5-hour session and 7-day week) and the status of your running
-Claude Code sessions on an ESP32-2432S028 "Cheap Yellow Display" (CYD).
-USB serial only: no Wi-Fi, no token on the device.
+<h1 align="center">Claude-Usage-Display</h1>
+
+<p align="center">
+  Shows your Claude usage (5-hour session and 7-day week) and the status of your running
+  Claude Code sessions on an ESP32-2432S028 "Cheap Yellow Display" (CYD).<br>
+  Tap a session to open it in Claude Desktop. USB serial only: no Wi-Fi, no token on the device.
+</p>
+
+<p align="center">
+  <img src="docs/images/home.png" width="32%" alt="Home page">
+  <img src="docs/images/local.png" width="32%" alt="Local sessions">
+  <img src="docs/images/remote.png" width="32%" alt="Remote sessions">
+</p>
 
 ```
 Claude CLI (get_usage)  ─┐
@@ -25,8 +37,8 @@ Remote Control list     ─┘    PowerShell 7)
 > In the background the collector uses the CLI that ships with Claude Desktop; you don't
 > install or use the CLI yourself.
 
-> The texts on the display and in the log are in German. This README quotes them as they
-> appear, with the English meaning next to them.
+> Unofficial community project, not affiliated with or endorsed by Anthropic. Claude is a
+> trademark of Anthropic. The display texts are in English; the collector's log is in German.
 
 ## Requirements
 
@@ -55,6 +67,7 @@ Remote Control list     ─┘    PowerShell 7)
 | `host/install.ps1` | Sets up autostart (Task Scheduler, no admin) and signs in the CLI |
 | `host/uninstall.ps1` | Undoes everything |
 | `setup/` | Setup assistant for the release ZIP (`Setup.cmd`, `Setup.ps1`, `Uninstall.cmd`, `README.txt`) |
+| `docs/images/` | Logo and the screenshots in this README |
 | `tools/make-release.ps1` | Builds a release into `dist/`: all firmware images (checked for local paths) and the setup ZIP |
 
 ## Quick start (plug & play)
@@ -175,7 +188,7 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File .\host\install.ps1 -LocalLabel "La
 
 | Parameter | Effect |
 |---|---|
-| `-LocalLabel`, `-RemoteLabel` | Title of page 1 and 2 (default "Lokal" / "Remote"); `""` restores the default |
+| `-LocalLabel`, `-RemoteLabel` | Title of page 1 and 2 (default "Local" / "Remote"); `""` restores the default |
 | `-Port COMx` | Use a fixed COM port instead of searching; `""` switches back to automatic |
 | `-NoLogin` | Do not start the CLI login |
 
@@ -187,8 +200,8 @@ skipped for 10 minutes after 6 s without an answer.
 
 ### 5. Check
 
-- After about 5–10 s the display shows values, with "Stand HH:MM" (= "as of HH:MM") at
-  the bottom.
+- After about 5–10 s the display shows values, with "@ HH:MM" (time of the last fetch)
+  at the bottom.
 - Log: `%USERPROFILE%\.usage-display\collector.log`
 - Latest values: `%USERPROFILE%\.usage-display\latest.json`
 
@@ -238,34 +251,25 @@ internally. It briefly starts the Claude CLI in headless mode
 
 ## Display
 
-**Page 0: Home**
+<p align="center"><img src="docs/images/home.png" width="480" alt="Home page: session and week gauges, session line, status dots"></p>
 
-```
-┌────────────────────────────────────────┐
-│ Claude Usage      ● ○ ○       ● 11:36  │  page dots, green ● = data is current
-│   ╭──────╮            ╭──────╮         │
-│  │  17 %  │          │  24 %  │        │  ring: green up to 50 %,
-│  │Session │          │ Woche  │        │  yellow around 80 %, red from 95 %
-│ Reset 3 h 14 min      Reset 3 T 2 h    │
-│ Limit ca. 13:40     ca. 38 % bis Reset │  forecast
-│ ● wartet: API client refa... 12 min +1 │  session line
-│ ● ● | ● ● ●                Stand 11:35 │  dots: one per running session
-└────────────────────────────────────────┘
-```
+**Page 0: Home.** Two ring gauges for the 5-hour session and the 7-day week (green up to
+50 %, yellow around 80 %, red from 95 %), each with the time until its reset ("Reset 2h
+14m", "Reset 3d 5h") and a forecast. Below them the session line; at the bottom one dot
+per running session and "@ HH:MM", the time of the last usage fetch. The header shows the
+page dots and the clock; the green dot means the data is current.
 
-"Woche" = week, "T" = days ("Tage").
-
-- **Forecast:** "Limit ca. HH:MM" (= limit reached around HH:MM, orange) if, at the average
-  pace since the window started (reset minus 5 h or 7 days, starting at 0 %), the limit
-  is reached before the reset; otherwise "ca. XX % bis Reset" (= about XX % at reset: the
-  projected value at reset, colored like the gauges). Example: 20 % after 2.6 h →
-  7.7 %/h → about 38 % at reset. It only appears 30 min (session) or 12 h (week) after
-  the window started; before that it would be too jumpy.
-- **Session line:** the session that is waiting for you (orange, "wartet: …" = waiting),
-  otherwise the one that is working (green, "arbeitet: …" = working), with its title;
-  for a waiting session also how long it has been waiting ("12 min", red after 10 min);
-  "+1" etc. counts further active sessions. Local and remote sessions both count. If all
-  running sessions are idle it says "alle Sessions idle"; without running sessions it is empty.
+- **Forecast:** "Limit ~HH:MM" (orange) if, at the average pace since the window started
+  (reset minus 5 h or 7 days, starting at 0 %), the limit is reached before the reset,
+  with a weekday if that is more than 20 h away; otherwise "~XX% @ Reset", the projected
+  value at reset, colored like the gauges. Example: 20 % after 2.6 h → 7.7 %/h → about
+  38 % at reset. It only appears 30 min (session) or 12 h (week) after the window started;
+  before that it would be too jumpy.
+- **Session line:** the session that is waiting for you (orange, "waiting: …"), otherwise
+  the one that is working (green, "working: …"), with its title; for a waiting session
+  also how long it has been waiting ("7m", red after 10 min); "+2" counts further active
+  sessions. Local and remote sessions both count. If all running sessions are idle it says
+  "all sessions idle"; without running sessions it is empty.
 - **Dots:** local sessions on the left, connected remote sessions after the separator.
   Pulsing green = working, fast-blinking orange = waiting for you, gray = idle. "Waiting"
   means an open permission prompt or question; for local Claude Desktop sessions also a
@@ -273,12 +277,18 @@ internally. It briefly starts the Claude CLI in headless mode
   until you open the session. For remote sessions only open prompts count. Clearing the
   yellow dot via "Mark as completed" in the app's menu is not visible to the display.
 
-**Pages 1 (Local, "Lokal") and 2 (Remote):** the last 7 sessions with a status dot (colors
-as above, hollow ring = offline/ended), title and age of the last activity ("5 min",
-"3 h", "2 T" = 2 days; for waiting sessions "wartet" = waiting). Before that, how full the
-session's context window is ("51%", orange from 75 %, red from 90 %); only for sessions
-with Remote Control, because the value comes from the remote session list. At the bottom a
-summary, e.g. "1 arbeitet, 4 idle" (1 working, 4 idle).
+<p align="center">
+  <img src="docs/images/local.png" width="48%" alt="Local sessions with status, context fill and age">
+  <img src="docs/images/remote.png" width="48%" alt="Remote sessions of another machine">
+</p>
+
+**Pages 1 (Local) and 2 (Remote):** the last 7 sessions with a status dot (colors as
+above, hollow ring = offline/ended), title, how full the session's context window is
+("64%", orange from 75 %, red from 90 %; only for sessions with Remote Control, because
+the value comes from the remote session list) and the age of the last activity ("now",
+"25m", "2h", "3d"; "waiting" for sessions that wait for you). At the bottom a summary,
+e.g. "2 working, 1 waiting, 2 idle". Page 2 can have its own title, like "build-server"
+above (`install.ps1 -RemoteLabel`).
 
 **Tap to open:** tapping the session line (page 0) or a list row (pages 1/2) opens that
 session in Claude Desktop, local and remote sessions alike (remote ones in the app's view
@@ -292,21 +302,24 @@ for you), the whole screen inverts for a quarter of a second. Not while Windows 
 Remote sessions are only fetched every 30 s: they flash if two fetches in a row saw them
 working (so after about 30 s of work or more), and up to 30 s late.
 
-- **"Warte auf Daten"** (waiting for data): the display has not received anything from
-  the host since it started.
-- **"Offline":** no message from the host for 90 s. The last known values are shown at
-  the bottom.
+- **"Waiting for data":** the display has not received anything from the host since it
+  started.
+- **"Offline":** no message from the host for 90 s ("No data for …"). The last known
+  values are shown at the bottom.
 - **`--`:** value unknown, e.g. before the first successful fetch.
 - **Brightness:** always 100 %; while Windows is locked the backlight is off. (The light
   sensor is not used: inside a case it reads "dark" even in a normally lit room.)
+
+The screenshots are read straight from a real display (debug build with `-DSCREENSHOT`)
+that was fed demo sessions.
 
 ## Troubleshooting
 
 | Symptom | Cause / fix |
 |---|---|
-| Footer "Nicht angemeldet: claude auth login" (not signed in) | Run `install.ps1` again; it starts the login |
-| Footer "Claude-CLI nicht gefunden" (CLI not found) | Is Claude Desktop installed and has its Code tab been opened at least once? The desktop app downloads its bundled CLI there |
-| "Warte auf Daten" stays on screen | Is the task running? `Get-ScheduledTask 'Claude Usage Display'`; also check `collector.log` |
+| Footer "Not signed in: claude auth login" | Run `install.ps1` again; it starts the login |
+| Footer "Claude CLI not found" | Is Claude Desktop installed and has its Code tab been opened at least once? The desktop app downloads its bundled CLI there |
+| "Waiting for data" stays on screen | Is the task running? `Get-ScheduledTask 'Claude Usage Display'`; also check `collector.log` |
 | Log: "Port COMx nicht verfuegbar: Access … denied" (port not available) | Another program holds the port (serial monitor, PlatformIO upload, a second collector). The collector retries every 3 s |
 | Display is not found | Device Manager: does "USB-SERIAL CH340 (COMx)" or "CP210x (COMx)" show up? If not, install the chip's driver (WCH CH341SER or Silicon Labs CP210x). Charge-only cable? |
 | Board restarts when the port is opened | Happens occasionally (DTR/RTS auto-reset circuit). Harmless: the board sends `hello` and the collector immediately sends the current state |
@@ -314,9 +327,9 @@ working (so after about 30 s of work or more), and up to 30 s late.
 | Log: "Kein Display an COMx (keine Antwort)" (no display, no answer) | Another USB serial device is on that port, or the board does not run this firmware yet. Flash the firmware or set `install.ps1 -Port COMx` |
 | White screen | SPI clock too high. It is set to 27 MHz in `lgfx_cyd.h`; above about 32 MHz the panel initialisation fails on some boards |
 | PlatformIO install fails with `CERTIFICATE_VERIFY_FAILED` | A proxy with TLS inspection (common in corporate networks) intercepts the connection. Install outside that network or point `REQUESTS_CA_BUNDLE` to the corporate certificate |
-| Numbers differ briefly from claude.ai | The fetch runs every 2 minutes; "Stand HH:MM" tells you how current they are |
-| Remote page: "Kein CLI-Login" / "Liste: Login abgelaufen" (no CLI login / login expired) | The CLI login is missing or expired: run `install.ps1` again |
-| Remote page: "Liste nicht abrufbar" (list not available) | No network, or the internal interface has changed. The last list stays on screen |
+| Numbers differ briefly from claude.ai | The fetch runs every 2 minutes; "@ HH:MM" at the bottom tells you how current they are |
+| Remote page: "No CLI login" / "List: login expired" | The CLI login is missing or expired: run `install.ps1` again |
+| Remote page: "List unavailable" | No network, or the internal interface has changed. The last list stays on screen |
 | Remote page stays empty | Remote Control is not enabled on the other machine, or it uses a different Claude account |
 | Display stays dark although unlocked | "Locked" means `LogonUI.exe` is running. After unlocking, the next update arrives within 2 s |
 

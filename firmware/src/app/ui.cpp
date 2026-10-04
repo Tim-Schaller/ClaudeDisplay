@@ -27,7 +27,7 @@ static const uint32_t C_GREEN = 0x22C55E;
 static const uint32_t C_YELLOW = 0xFACC15;
 static const uint32_t C_RED = 0xEF4444;
 static const uint32_t C_AMBER = 0xF59E0B;
-static const uint32_t C_OK = 0x339B59;      // "reicht bis Reset" (0x4ADE80 * 0.7)
+static const uint32_t C_OK = 0x339B59;      // "OK until reset" (0x4ADE80 * 0.7)
 static const uint32_t C_PULSE = 0x14532D;   // arbeitende Session, gedimmte Puls-Phase
 static const uint32_t C_IDLE = 0x64748B;
 static const uint32_t C_OFFLINE = 0x475569;
@@ -45,7 +45,7 @@ static const uint32_t FLASH_MS = 400;     // getippte Zeile so lange hervorheben
 static const uint32_t C_FLASH = 0x334155; // Hintergrund der getippten Zeile
 
 // Standardtitel; für Seite 1/2 kann der Host einen eigenen Titel mitschicken (list.l).
-static const char *const PAGE_TITLE[3] = {"Claude Usage", "Lokal", "Remote"};
+static const char *const PAGE_TITLE[3] = {"Claude Usage", "Local", "Remote"};
 
 static const char *pageTitle(const ViewModel &vm) {
   if (vm.page > 0 && vm.list[vm.page - 1].label[0]) return vm.list[vm.page - 1].label;
@@ -103,42 +103,42 @@ static void fmtCountdown(char *out, size_t n, const Window &w, int64_t now) {
   }
   int64_t s = w.reset - now;
   if (s <= 0) {
-    snprintf(out, n, "Reset jetzt");
+    snprintf(out, n, "Reset now");
     return;
   }
-  // Erst aufrunden, dann die Einheit wählen (sonst "60 min" bzw. "24 h 00 min").
+  // Erst aufrunden, dann die Einheit wählen (sonst "60m" bzw. "24h 00m").
   int mins = (int)((s + 59) / 60);
   if (mins < 60) {
-    snprintf(out, n, "Reset %d min", mins);
+    snprintf(out, n, "Reset %dm", mins);
   } else if (mins < 24 * 60) {
-    snprintf(out, n, "Reset %d h %02d min", mins / 60, mins % 60);
+    snprintf(out, n, "Reset %dh %02dm", mins / 60, mins % 60);
   } else {
     int hours = (int)((s + 3599) / 3600);
-    snprintf(out, n, "Reset %d T %d h", hours / 24, hours % 24);
+    snprintf(out, n, "Reset %dd %dh", hours / 24, hours % 24);
   }
 }
 
-// Prognose: "Limit ca. HH:MM" (mehr als 20 h voraus mit Wochentag), "ca. 64 % bis Reset"
+// Prognose: "Limit ~HH:MM" (mehr als 20 h voraus mit Wochentag), "~64% @ Reset"
 // (hochgerechneter Stand beim Reset) oder leer (zu wenig Daten). Liefert die Textfarbe.
 static uint32_t fmtForecast(char *out, size_t n, const Window &w, int64_t now, int tzMin) {
   out[0] = 0;
   if (w.forecast < 0) return C_DIM;
   if (w.forecast == 0) {
     if (w.expect >= 0) {
-      snprintf(out, n, "ca. %d %% bis Reset", w.expect);
+      snprintf(out, n, "~%d%% @ Reset", w.expect);
       return levelColor(w.expect);
     }
-    snprintf(out, n, "reicht bis Reset");
+    snprintf(out, n, "OK until reset");
     return C_OK;
   }
   char hm[8];
   fmtHM(hm, sizeof hm, w.forecast, tzMin);
   if (now > 0 && w.forecast - now > 20 * 3600) {
-    static const char *const DAY[7] = {"Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"};
+    static const char *const DAY[7] = {"Mo", "Tu", "We", "Th", "Fr", "Sa", "Su"};
     int64_t days = (w.forecast + (int64_t)tzMin * 60) / 86400;  // 1.1.1970 = Donnerstag
-    snprintf(out, n, "Limit ca. %s %s", DAY[(days + 3) % 7], hm);
+    snprintf(out, n, "Limit ~%s %s", DAY[(days + 3) % 7], hm);
   } else {
-    snprintf(out, n, "Limit ca. %s", hm);
+    snprintf(out, n, "Limit ~%s", hm);
   }
   return C_AMBER;
 }
@@ -149,20 +149,20 @@ static void fmtAge(char *out, size_t n, int64_t t, int64_t now) {
   if (t <= 0 || now <= 0) {
     out[0] = 0;
   } else if (s < 60) {
-    snprintf(out, n, "jetzt");
+    snprintf(out, n, "now");
   } else if (s < 3600) {
-    snprintf(out, n, "%d min", (int)(s / 60));
+    snprintf(out, n, "%dm", (int)(s / 60));
   } else if (s < 86400) {
-    snprintf(out, n, "%d h", (int)(s / 3600));
+    snprintf(out, n, "%dh", (int)(s / 3600));
   } else {
-    snprintf(out, n, "%d T", (int)(s / 86400 > 999 ? 999 : s / 86400));
+    snprintf(out, n, "%dd", (int)(s / 86400 > 999 ? 999 : s / 86400));
   }
 }
 
-// Wartezeit für die Session-Zeile: "<1 min", "12 min", "3 h", "2 T"; leer = unbekannt.
+// Wartezeit für die Session-Zeile: "<1m", "12m", "3h", "2d"; leer = unbekannt.
 static void fmtWait(char *out, size_t n, int64_t since, int64_t now) {
   if (since > 0 && now > 0 && now - since < 60) {
-    snprintf(out, n, "<1 min");
+    snprintf(out, n, "<1m");
   } else {
     fmtAge(out, n, since, now);
   }
@@ -328,10 +328,10 @@ static void renderSessionLine(const SessionLine &s, const char *wait, bool alert
   if (s.st == 'i') {
     paintDot(bar, 14, BAR_H / 2, 5, 'i');
     bar.setTextColor(C_DIM);
-    bar.drawString("alle Sessions idle", 28, BAR_H / 2);
+    bar.drawString("all sessions idle", 28, BAR_H / 2);
   } else if (s.st == 'a' || s.st == 'w') {
     paintDot(bar, 14, BAR_H / 2, 5, s.st);
-    const char *prefix = s.st == 'a' ? "wartet: " : "arbeitet: ";
+    const char *prefix = s.st == 'a' ? "waiting: " : "working: ";
     bar.setTextColor(s.st == 'a' ? C_AMBER : C_GREEN);
     bar.drawString(prefix, 28, BAR_H / 2);
     const int x = 28 + bar.textWidth(prefix);
@@ -450,7 +450,7 @@ static void renderRow(int i, const ListItem *it, const char *right, bool hl) {
       titleEnd -= bar.textWidth(ctx) + 10;
     }
     char title[sizeof it->name + 3];
-    strlcpy(title, it->name[0] ? it->name : "Ohne Titel", sizeof title);
+    strlcpy(title, it->name[0] ? it->name : "Untitled", sizeof title);
     fitText(bar, title, titleEnd - 28, true);
     bar.setTextDatum(middle_left);
     bar.setTextColor(C_TEXT);
@@ -462,8 +462,8 @@ static void renderRow(int i, const ListItem *it, const char *right, bool hl) {
 // "2 arbeiten, 1 wartet, 3 idle" (Nullwerte weggelassen; offline zeigen die Ringe).
 static void fmtSummary(char *out, size_t n, const SessionList &l) {
   static const char ST[3] = {'w', 'a', 'i'};
-  static const char *const ONE[3] = {"arbeitet", "wartet", "idle"};
-  static const char *const MANY[3] = {"arbeiten", "warten", "idle"};
+  static const char *const ONE[3] = {"working", "waiting", "idle"};
+  static const char *const MANY[3] = {"working", "waiting", "idle"};
   out[0] = 0;
   for (int k = 0; k < 3; k++) {
     int c = 0;
@@ -472,7 +472,7 @@ static void fmtSummary(char *out, size_t n, const SessionList &l) {
     size_t len = strlen(out);
     snprintf(out + len, n - len, "%s%d %s", len ? ", " : "", c, c == 1 ? ONE[k] : MANY[k]);
   }
-  if (!out[0] && l.n) snprintf(out, n, "keine aktiv");
+  if (!out[0] && l.n) snprintf(out, n, "none active");
 }
 
 // --- Offline/Warten --------------------------------------------------------
@@ -597,7 +597,7 @@ void uiRender(const ViewModel &vm) {
 
   if (vm.screen == Screen::Usage && vm.page == 0) {
     const Window *win[2] = {&vm.session, &vm.week};
-    static const char *const TITLE[2] = {"Session", "Woche"};
+    static const char *const TITLE[2] = {"Session", "Week"};
     for (int k = 0; k < 2; k++) {
       char reset[32], fc[32], sig[128];
       fmtCountdown(reset, sizeof reset, *win[k], vm.now);
@@ -621,8 +621,8 @@ void uiRender(const ViewModel &vm) {
       snprintf(footText, sizeof footText, "%s", vm.err);
       footColor = C_AMBER;
     } else {
-      strcpy(stand, "Stand --:--");
-      if (vm.fetchedAt > 0) fmtHM(stand + 6, sizeof stand - 6, vm.fetchedAt, vm.tzMin);
+      strcpy(stand, "@ --:--");
+      if (vm.fetchedAt > 0) fmtHM(stand + 2, sizeof stand - 2, vm.fetchedAt, vm.tzMin);
       footDots = vm.dots;
     }
   } else if (vm.screen == Screen::Usage) {
@@ -637,7 +637,7 @@ void uiRender(const ViewModel &vm) {
         lcd.setTextDatum(middle_center);
         lcd.setFont(&fonts::FreeSans9pt7b);
         lcd.setTextColor(C_DIM);
-        lcd.drawString(mode == 'N' ? "Warte auf Daten" : "Keine Sessions", W / 2, 120);
+        lcd.drawString(mode == 'N' ? "Waiting for data" : "No sessions", W / 2, 120);
       }
     }
     for (int i = 0; mode == 'L' && i < LIST_MAX; i++) {
@@ -645,7 +645,7 @@ void uiRender(const ViewModel &vm) {
       char right[12] = "", sig[80] = "";
       if (it) {
         if (it->st == 'a') {
-          strcpy(right, "wartet");
+          strcpy(right, "waiting");
         } else {
           fmtAge(right, sizeof right, it->act, vm.now);
         }
@@ -663,34 +663,34 @@ void uiRender(const ViewModel &vm) {
       fmtSummary(footText, sizeof footText, l);
     }
     if (l.have) {
-      strcpy(stand, "Stand --:--");
-      if (l.at > 0) fmtHM(stand + 6, sizeof stand - 6, l.at, vm.tzMin);
+      strcpy(stand, "@ --:--");
+      if (l.at > 0) fmtHM(stand + 2, sizeof stand - 2, l.at, vm.tzMin);
     }
   } else if (vm.screen == Screen::Waiting) {
     if (lastNotice[0] != 'W') {
       strcpy(lastNotice, "W");
-      renderNotice("Warte auf Daten", "USB verbunden.", "Collector am PC starten", C_DIM);
+      renderNotice("Waiting for data", "USB connected.", "Start the collector on the PC", C_DIM);
     }
     snprintf(footText, sizeof footText, "Firmware %s", gFw);
   } else {
     char notice[64], line1[48];
     uint32_t mins = vm.offlineSecs / 60;
     if (mins < 2) {
-      snprintf(line1, sizeof line1, "Keine Daten seit %lu s", (unsigned long)vm.offlineSecs / 30 * 30);
+      snprintf(line1, sizeof line1, "No data for %lu s", (unsigned long)vm.offlineSecs / 30 * 30);
     } else if (mins < 120) {
-      snprintf(line1, sizeof line1, "Keine Daten seit %lu min", (unsigned long)mins);
+      snprintf(line1, sizeof line1, "No data for %lu min", (unsigned long)mins);
     } else {
-      snprintf(line1, sizeof line1, "Keine Daten seit %lu h", (unsigned long)(mins / 60));
+      snprintf(line1, sizeof line1, "No data for %lu h", (unsigned long)(mins / 60));
     }
     snprintf(notice, sizeof notice, "O|%s", line1);
     if (strcmp(notice, lastNotice) != 0) {
       strcpy(lastNotice, notice);
-      renderNotice("Offline", line1, "Laeuft der Collector am PC?", C_AMBER);
+      renderNotice("Offline", line1, "Is the collector running?", C_AMBER);
     }
     char s[8] = "--", w[8] = "--";
     if (vm.session.pct >= 0) snprintf(s, sizeof s, "%d%%", (int)lroundf(vm.session.pct));
     if (vm.week.pct >= 0) snprintf(w, sizeof w, "%d%%", (int)lroundf(vm.week.pct));
-    snprintf(footText, sizeof footText, "Zuletzt: Session %s | Woche %s", s, w);
+    snprintf(footText, sizeof footText, "Last: Session %s | Week %s", s, w);
   }
 
   char footer[160];
@@ -713,6 +713,9 @@ void uiRender(const ViewModel &vm) {
 void uiScreenshot() {
   static uint16_t px[W];
   static char hex[W * 4 + 1];
+  // Animierte Dots in der An-Phase zeichnen, sonst fehlen blinkende Dots im Bild.
+  gPulseOn = gBlinkOn = true;
+  animateDots(true, true);
   for (int y = 0; y < H; y++) {
     lcd.readRect(0, y, W, 1, px);
     for (int x = 0; x < W; x++) snprintf(hex + x * 4, 5, "%04X", px[x]);

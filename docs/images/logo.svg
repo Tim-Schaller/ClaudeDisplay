@@ -1,0 +1,33 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
+  <defs>
+    <linearGradient id="gsBoard" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#FDE047"/>
+      <stop offset="1" stop-color="#EAB308"/>
+    </linearGradient>
+    <linearGradient id="gsScreen" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#161A20"/>
+      <stop offset="1" stop-color="#0B0D10"/>
+    </linearGradient>
+    <linearGradient id="gsArc" gradientUnits="userSpaceOnUse" x1="60" y1="190" x2="196" y2="84">
+      <stop offset="0" stop-color="#22C55E"/>
+      <stop offset="0.68" stop-color="#FACC15"/>
+      <stop offset="1" stop-color="#F59E0B"/>
+    </linearGradient>
+    <radialGradient id="gsGlow" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#22C55E" stop-opacity="0.6"/>
+      <stop offset="0.45" stop-color="#22C55E" stop-opacity="0.2"/>
+      <stop offset="1" stop-color="#22C55E" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <!-- yellow board / device body -->
+  <rect x="5" y="5" width="246" height="246" rx="56" fill="url(#gsBoard)" stroke="#CA8A04" stroke-width="2"/>
+  <!-- screen -->
+  <rect x="22" y="22" width="212" height="212" rx="40" fill="url(#gsScreen)"/>
+  <!-- gauge track (270 deg, open at the bottom) -->
+  <path d="M78.5 183.5 A70 70 0 1 1 177.5 183.5" fill="none" stroke="#262B33" stroke-width="26" stroke-linecap="round"/>
+  <!-- gauge fill (~72 %) -->
+  <path d="M78.5 183.5 A70 70 0 1 1 188.62 99" fill="none" stroke="url(#gsArc)" stroke-width="26" stroke-linecap="round"/>
+  <!-- status dot -->
+  <circle cx="128" cy="134" r="34" fill="url(#gsGlow)"/>
+  <circle cx="128" cy="134" r="15" fill="#22C55E"/>
+</svg>

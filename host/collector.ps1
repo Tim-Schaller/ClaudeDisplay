@@ -55,7 +55,7 @@ function Write-Log([string]$Message) {
 
 . (Join-Path $PSScriptRoot 'claude-cli.ps1')  # Find-ClaudeExe
 
-# Fehlertexte landen auf dem Display: nur ASCII, max. 44 Zeichen.
+# Fehlertexte landen auf dem Display (englisch wie alle Display-Texte): nur ASCII, max. 44 Zeichen.
 function Format-DisplayError([string]$Text) {
   $ascii = -join ($Text.ToCharArray() | ForEach-Object { if ([int]$_ -ge 32 -and [int]$_ -lt 127) { $_ } else { '?' } })
   if ($ascii.Length -gt 44) { $ascii = $ascii.Substring(0, 44) }
@@ -79,7 +79,7 @@ function ConvertTo-DisplayTitle([string]$Text) {
 function Get-ShownTitle([string]$Text) {
   $n = ConvertTo-DisplayTitle $Text
   if ($n) { return $n }
-  return '(ohne Titel)'
+  return '(untitled)'
 }
 
 function ConvertTo-Window($w) {
@@ -99,7 +99,7 @@ function ConvertTo-Window($w) {
 # Close-UsageFetch beendet die CLI.
 function Start-UsageFetch {
   $exe = Find-ClaudeExe
-  if (-not $exe) { throw 'Claude-CLI nicht gefunden' }
+  if (-not $exe) { throw 'Claude CLI not found' }
 
   $psi = [Diagnostics.ProcessStartInfo]::new($exe)
   foreach ($a in @('--print', '--verbose', '--input-format', 'stream-json', '--output-format', 'stream-json',
@@ -138,14 +138,14 @@ function Receive-UsageFetch($F) {
     $line = $F.Read.Result
     if ($null -eq $line) {
       $why = if ($F.Err.Wait(1000)) { $F.Err.Result -split "`r?`n" | Where-Object { $_.Trim() } | Select-Object -First 1 }
-      throw "Claude-CLI beendet: $why"
+      throw "Claude CLI exited: $why"
     }
     $F.Read = $F.Proc.StandardOutput.ReadLineAsync()
     if (-not $line.StartsWith('{')) { continue }
     try { $msg = $line | ConvertFrom-Json -DateKind String } catch { continue }
     if ($msg.type -eq 'control_response' -and $msg.response.request_id -eq 'usage') { return ConvertFrom-UsageResponse $msg.response }
   }
-  if ([DateTime]::UtcNow -ge $F.Deadline) { throw 'Zeitueberschreitung beim Abruf' }
+  if ([DateTime]::UtcNow -ge $F.Deadline) { throw 'Usage fetch timed out' }
   return $null
 }
 
@@ -174,10 +174,10 @@ function Remove-ClosedUsageFetch([switch]$Wait) {
 }
 
 function ConvertFrom-UsageResponse($resp) {
-  if ($resp.subtype -ne 'success') { throw "CLI-Fehler: $($resp.error)" }
+  if ($resp.subtype -ne 'success') { throw "CLI error: $($resp.error)" }
   $u = $resp.response
-  if (-not $u.rate_limits_available) { throw 'Nicht angemeldet: claude auth login' }
-  if ($null -eq $u.rate_limits) { throw 'Usage gerade nicht abrufbar' }
+  if (-not $u.rate_limits_available) { throw 'Not signed in: claude auth login' }
+  if ($null -eq $u.rate_limits) { throw 'Usage currently unavailable' }
   return [ordered]@{
     Session = ConvertTo-Window $u.rate_limits.five_hour
     Week    = ConvertTo-Window $u.rate_limits.seven_day
@@ -384,9 +384,9 @@ function Start-RemoteFetch($Http) {
     $file = Join-Path $ClaudeDir '.credentials.json'
     $token = if (Test-Path -LiteralPath $file) { (Get-Content -LiteralPath $file -Raw | ConvertFrom-Json).claudeAiOauth.accessToken }
   } catch {
-    return @{ Err = 'Liste nicht abrufbar'; Detail = 'Anmeldedaten nicht lesbar' }
+    return @{ Err = 'List unavailable'; Detail = 'Anmeldedaten nicht lesbar' }
   }
-  if (-not $token) { return @{ Err = 'Kein CLI-Login'; Detail = 'kein Token der CLI' } }
+  if (-not $token) { return @{ Err = 'No CLI login'; Detail = 'kein Token der CLI' } }
   $req = [Net.Http.HttpRequestMessage]::new([Net.Http.HttpMethod]::Get, $RemoteUrl)
   $req.Headers.Authorization = [Net.Http.Headers.AuthenticationHeaderValue]::new('Bearer', $token)
   $req.Headers.Add('anthropic-version', '2023-06-01')
@@ -397,17 +397,17 @@ function Start-RemoteFetch($Http) {
 function Receive-RemoteFetch($Task, $LocalIds) {
   if (-not $Task.IsCompletedSuccessfully) {
     $m = if ($Task.Exception) { $Task.Exception.GetBaseException().Message } else { 'Zeitueberschreitung' }
-    return @{ Err = 'Liste nicht abrufbar'; Detail = $m }
+    return @{ Err = 'List unavailable'; Detail = $m }
   }
   $resp = $Task.Result
   try {
     $code = [int]$resp.StatusCode
-    if ($code -eq 401 -or $code -eq 403) { return @{ Err = 'Liste: Login abgelaufen'; Detail = "HTTP $code" } }
-    if (-not $resp.IsSuccessStatusCode) { return @{ Err = 'Liste nicht abrufbar'; Detail = "HTTP $code" } }
+    if ($code -eq 401 -or $code -eq 403) { return @{ Err = 'List: login expired'; Detail = "HTTP $code" } }
+    if (-not $resp.IsSuccessStatusCode) { return @{ Err = 'List unavailable'; Detail = "HTTP $code" } }
     try {
       $ctx = @{}
       return @{ Items = @(ConvertFrom-RemoteSessions $resp.Content.ReadAsStringAsync().Result $LocalIds $ctx); Ctx = $ctx }
-    } catch { return @{ Err = 'Liste nicht abrufbar'; Detail = 'Antwort nicht lesbar' } }  # Text kann Titel enthalten
+    } catch { return @{ Err = 'List unavailable'; Detail = 'Antwort nicht lesbar' } }  # Text kann Titel enthalten
   } finally {
     $resp.Dispose()
   }
