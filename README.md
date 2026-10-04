@@ -11,6 +11,13 @@
 </p>
 
 <p align="center">
+  <a href="https://github.com/Tim-Schaller/ClaudeDisplay/releases/latest"><img src="https://img.shields.io/github/v/release/Tim-Schaller/ClaudeDisplay?label=release" alt="Latest release"></a>
+  <img src="https://img.shields.io/badge/platform-ESP32%20%7C%20Windows-blue" alt="Platform">
+  <img src="https://img.shields.io/badge/PowerShell-7.5%2B-5391FE" alt="PowerShell 7.5+">
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT%20%2B%20Commons%20Clause-green" alt="License"></a>
+</p>
+
+<p align="center">
   <img src="docs/images/home.png" width="32%" alt="Home page">
   <img src="docs/images/local.png" width="32%" alt="Local sessions">
   <img src="docs/images/remote.png" width="32%" alt="Remote sessions">
