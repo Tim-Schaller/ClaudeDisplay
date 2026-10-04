@@ -77,6 +77,7 @@ Remote Control list     ─┘    PowerShell 7)
 | `setup/` | Setup assistant for the release ZIP (`Setup.cmd`, `Setup.ps1`, `Uninstall.cmd`, `README.txt`) |
 | `docs/images/` | Logo and the screenshots in this README |
 | `tools/make-release.ps1` | Builds a release into `dist/`: all firmware images (checked for local paths) and the setup ZIP |
+| `CHANGELOG.md` | Notable changes per release |
 
 ## Quick start (plug & play)
 
