@@ -18,6 +18,11 @@
     (Heartbeat + Uhrzeit, Dots, Session-Zeile), list bei Änderung. Nach dem Verbinden bzw. hello alles einmal.
   - Tippt man am Display auf eine Session (open), öffnet er sie in Claude Desktop (lokale
     und Remote-Sessions).
+  - Langer Druck auf eine Session (detail): schickt ein Detailblatt (Status, Projekt, Branch,
+    Modell, Kontext, Start), für Remote-Sessions aus der Remote-API.
+  - Prüft alle 6 h das neueste Release auf GitHub; ist es neuer als die Firmware, zeigt das
+    Display ein Update-Banner. Tippt man es (zweimal) an, startet update.ps1 (lädt das
+    Setup-ZIP, prüft SHA256, flasht die Firmware, installiert den neuen Collector).
   - Übersteht Ab- und Anstecken; schreibt ein knappes Log nach collector.log
     (nie Session-Titel, nie Token).
 #>
@@ -34,6 +39,9 @@ $LocalSeconds = 2      # CLI-Registry und Bildschirmsperre
 $DesktopSeconds = 4    # Session-Dateien der Desktop-App (inkl. "needs input")
 $RemoteSeconds = 30    # Remote-Sessions über die API
 $FinishMinBusy = 10    # so lange muss eine Session gearbeitet haben für den Hinweis "fertig"
+$UpdateRepo = 'Tim-Schaller/ClaudeDisplay'  # Releases für das Update-Banner
+$UpdateHours = 6       # so oft nach einem neuen Release fragen
+$UpdateTimeoutMin = 10 # meldet sich der Collector bis dahin nicht neu, gilt das Update als gescheitert
 $RemoteUrl = 'https://api.anthropic.com/v1/code/sessions?limit=100'
 $MaxItems = 7          # Zeilen pro Listenseite
 $MaxLine = 1023        # Zeilenpuffer des Boards
@@ -60,6 +68,15 @@ function Format-DisplayError([string]$Text) {
   $ascii = -join ($Text.ToCharArray() | ForEach-Object { if ([int]$_ -ge 32 -and [int]$_ -lt 127) { $_ } else { '?' } })
   if ($ascii.Length -gt 44) { $ascii = $ascii.Substring(0, 44) }
   return $ascii
+}
+
+# Ein vom Board empfangenes Feld fürs Log entschärfen: nur druckbares ASCII, kurz. Das Board
+# sendet ohnehin nur ASCII; so können fehlerhafte oder manipulierte Zeilen das Log nicht
+# fälschen (keine Zeilenumbrüche/Steuerzeichen).
+function Format-Board([string]$Text) {
+  $s = -join ($Text.ToCharArray() | ForEach-Object { if ([int]$_ -ge 32 -and [int]$_ -lt 127) { $_ } })
+  if ($s.Length -gt 32) { $s = $s.Substring(0, 32) }
+  return $s
 }
 
 # Titel fürs Display: ASCII, Umlaute umschreiben (ä -> ae ...), sonstiges Nicht-ASCII
@@ -262,6 +279,7 @@ function Get-LocalSessions([hashtable]$Cache, [int[]]$Exclude = @()) {
         HostId   = [string]$j.hostSessionId
         Bridge   = [string]$j.bridgeSessionId
         Activity = [int64][Math]::Floor([double]$act / 1000)
+        Cwd      = [string]$j.cwd
       }
     })
   return @($list | Sort-Object Started)
@@ -294,6 +312,11 @@ function Get-DesktopSessions([hashtable]$Cache) {
           Activity = [int64][Math]::Floor([double]$j.lastActivityAt / 1000)
           Archived = [bool]$j.isArchived
           Bridges  = @($j.bridgeSessionIds | Where-Object { $_ -is [string] })
+          Cwd      = [string]$j.originCwd
+          Model    = [string]$j.model
+          Effort   = [string]$j.effort
+          Turns    = [int]$j.completedTurns
+          Created  = [int64][Math]::Floor([double]$j.createdAt / 1000)
           NeedsInput = $j.postTurnSummary.status_category -eq 'blocked' -and $j.postTurnSummaryFor -and
             $j.postTurnSummaryFor -eq $j.lastAssistantUuid -and [double]$j.lastFocusedAt -lt [double]$j.lastActivityAt
         }
@@ -338,11 +361,13 @@ function Get-LocalItems($Desktop, $Local, $Ctx) {
         a  = if ($l -and $l.Activity -gt $d.Activity) { $l.Activity } else { $d.Activity }
         c  = Get-ContextPct $Ctx (@($d.Bridges) + @(if ($l) { $l.Bridge }))
         Id = $d.Id  # local_...: zum Öffnen per Tippen (Terminal-Sessions haben keine)
+        Desk = $d   # für Details
+        Reg  = $l
       }
     })
   foreach ($l in $Local) {
     if ($l.Valid -and -not $l.Desktop) {
-      $items += [pscustomobject]@{ n = if ($l.Name) { $l.Name } else { 'Terminal' }; s = $l.Status; a = $l.Activity; c = Get-ContextPct $Ctx @($l.Bridge) }
+      $items += [pscustomobject]@{ n = if ($l.Name) { $l.Name } else { 'Terminal' }; s = $l.Status; a = $l.Activity; c = Get-ContextPct $Ctx @($l.Bridge); Reg = $l }
     }
   }
   return $items
@@ -384,9 +409,9 @@ function Start-RemoteFetch($Http) {
     $file = Join-Path $ClaudeDir '.credentials.json'
     $token = if (Test-Path -LiteralPath $file) { (Get-Content -LiteralPath $file -Raw | ConvertFrom-Json).claudeAiOauth.accessToken }
   } catch {
-    return @{ Err = 'List unavailable'; Detail = 'Anmeldedaten nicht lesbar' }
+    return @{ Err = 'List unavailable'; Detail = 'credentials not readable' }
   }
-  if (-not $token) { return @{ Err = 'No CLI login'; Detail = 'kein Token der CLI' } }
+  if (-not $token) { return @{ Err = 'No CLI login'; Detail = 'no CLI token' } }
   $req = [Net.Http.HttpRequestMessage]::new([Net.Http.HttpMethod]::Get, $RemoteUrl)
   $req.Headers.Authorization = [Net.Http.Headers.AuthenticationHeaderValue]::new('Bearer', $token)
   $req.Headers.Add('anthropic-version', '2023-06-01')
@@ -396,7 +421,7 @@ function Start-RemoteFetch($Http) {
 # Ergebnis des Abrufs: @{ Items } oder @{ Err (Display); Detail (Log) }.
 function Receive-RemoteFetch($Task, $LocalIds) {
   if (-not $Task.IsCompletedSuccessfully) {
-    $m = if ($Task.Exception) { $Task.Exception.GetBaseException().Message } else { 'Zeitueberschreitung' }
+    $m = if ($Task.Exception) { $Task.Exception.GetBaseException().Message } else { 'timeout' }
     return @{ Err = 'List unavailable'; Detail = $m }
   }
   $resp = $Task.Result
@@ -406,8 +431,9 @@ function Receive-RemoteFetch($Task, $LocalIds) {
     if (-not $resp.IsSuccessStatusCode) { return @{ Err = 'List unavailable'; Detail = "HTTP $code" } }
     try {
       $ctx = @{}
-      return @{ Items = @(ConvertFrom-RemoteSessions $resp.Content.ReadAsStringAsync().Result $LocalIds $ctx); Ctx = $ctx }
-    } catch { return @{ Err = 'List unavailable'; Detail = 'Antwort nicht lesbar' } }  # Text kann Titel enthalten
+      $info = @{}
+      return @{ Items = @(ConvertFrom-RemoteSessions $resp.Content.ReadAsStringAsync().Result $LocalIds $ctx $info); Ctx = $ctx; Info = $info }
+    } catch { return @{ Err = 'List unavailable'; Detail = 'response not readable' } }  # Text kann Titel enthalten
   } finally {
     $resp.Dispose()
   }
@@ -416,16 +442,28 @@ function Receive-RemoteFetch($Task, $LocalIds) {
 # Remote-Sessions aus GET /v1/code/sessions (interne, undokumentierte Schnittstelle, daher
 # defensiv). Archivierte und lokal gestartete (Bridge-IDs) weglassen; Rest = andere Rechner.
 # $Ctx bekommt den Kontext-Füllstand in % aller Sessions (auch der lokalen, für Seite 1),
-# Schlüssel = ID ohne Präfix cse_/session_.
-function ConvertFrom-RemoteSessions([string]$Json, $LocalIds, [hashtable]$Ctx = @{}) {
+# $Info die Angaben fürs Detailblatt; Schlüssel = ID ohne Präfix cse_/session_.
+function ConvertFrom-RemoteSessions([string]$Json, $LocalIds, [hashtable]$Ctx = @{}, [hashtable]$Info = @{}) {
   $o = $Json | ConvertFrom-Json -DateKind String -NoEnumerate
-  $rows = if ($o -is [array]) { $o } elseif ($o.data -is [array]) { $o.data } else { throw 'Antwort ohne data' }
+  $rows = if ($o -is [array]) { $o } elseif ($o.data -is [array]) { $o.data } else { throw 'response without data' }
   foreach ($r in $rows) {
     if ($r.id -isnot [string] -or $r.status -eq 'archived') { continue }
     $body = $r.id -replace '^(cse|session)_', ''
     $u = $r.external_metadata.context_usage
     if ($u -and [double]$u.max_tokens -gt 0) {
       $Ctx[$body] = [int][Math]::Min(100, [Math]::Max(0, [Math]::Round(100 * [double]$u.used_tokens / [double]$u.max_tokens)))
+    }
+    $br = @($r.external_metadata.current_branches.PSObject.Properties) | Select-Object -First 1
+    $created = [int64]0
+    try { $created = [DateTimeOffset]::Parse($r.created_at, [Globalization.CultureInfo]::InvariantCulture).ToUnixTimeSeconds() } catch { }
+    $Info[$body] = @{
+      Model   = [string]$(if ($r.config.model) { $r.config.model } else { $r.external_metadata.model })
+      Effort  = [string]$(if ($r.config.effort_level) { $r.config.effort_level } else { $r.external_metadata.effort_level })
+      Repo    = [string]$br.Name
+      Branch  = [string]$br.Value
+      Used    = [double]$u.used_tokens
+      Max     = [double]$u.max_tokens
+      Created = $created
     }
     if ($LocalIds.Contains($body)) { continue }
     $a = [int64]0
@@ -463,39 +501,159 @@ function Get-SessionLine($LocalItems, $Remote) {
   return $x
 }
 
+# Die getippte bzw. lange gedrückte Session: auf Seite 1/2 die Zeile der zuletzt gebauten Liste,
+# wenn der Titel passt; sonst (Liste inzwischen geändert) nach dem Titel gesucht, bei gleichem
+# Titel die wartende bzw. zuletzt aktive. $null, wenn nichts passt.
+function Find-TappedItem($Msg, $Shown, $LocalItems, $Remote) {
+  $p = [int]$Msg.p
+  $i = [int]$Msg.i
+  if ($p -in 1, 2 -and $i -ge 0 -and $i -lt @($Shown[$p]).Count) {
+    $c = @($Shown[$p])[$i]
+    if ((Get-ShownTitle $c.n) -ceq [string]$Msg.n) { return $c }
+  }
+  $pool = switch ($p) {
+    0 { @(@($LocalItems) + @($Remote) | Where-Object { $_ -and $_.s -in 'a', 'w' }) }
+    1 { @($LocalItems) }
+    2 { @($Remote) }
+    default { @() }
+  }
+  return @($pool | Where-Object { $_ -and (Get-ShownTitle $_.n) -ceq [string]$Msg.n } |
+      Sort-Object @{ e = { $_.s -eq 'a' }; Descending = $true }, @{ e = 'a'; Descending = $true }) |
+    Select-Object -First 1
+}
+
+# Alter kurz: "now", "7m", "3h", "2d".
+function Format-Age([int64]$Seconds) {
+  if ($Seconds -lt 60) { return 'now' }
+  if ($Seconds -lt 3600) { return "$([int][Math]::Floor($Seconds / 60))m" }
+  if ($Seconds -lt 86400) { return "$([int][Math]::Floor($Seconds / 3600))h" }
+  return "$([int][Math]::Floor($Seconds / 86400))d"
+}
+
+# Tokens kurz: 512360 -> "512k", 1000000 -> "1M".
+function Format-Tokens([double]$N) {
+  if ($N -ge 1000000) { return ('{0:0.#}M' -f ($N / 1000000)).Replace(',', '.') }
+  return "$([int][Math]::Round($N / 1000))k"
+}
+
+# Angaben der Remote-API zur ersten bekannten Remote-Control-ID (lokale Sessions) bzw. zur ID.
+function Get-RemoteInfo($Info, $Ids) {
+  if (-not $Info) { return $null }
+  foreach ($i in $Ids) {
+    if (-not $i) { continue }
+    $v = $Info[($i -replace '^(session|cse)_', '')]
+    if ($v) { return $v }
+  }
+  return $null
+}
+
+# Zeilen fürs Detailblatt: @(Schlüssel, Wert), ASCII, nur Bekanntes, höchstens 7.
+# Lokal aus Desktop-App bzw. Registry (Ordner, Modell, Turns), dazu die Remote-API (Repo,
+# Branch, Kontext); Remote-Sessions nur aus der Remote-API.
+function Get-DetailRows($Item, [bool]$IsLocal, [string]$RemoteLabel, $Info, [int64]$Now) {
+  $rows = [Collections.Generic.List[object]]::new()
+  $add = { param([string]$k, [string]$v) $v = ConvertTo-DisplayTitle $v; if ($v -and $rows.Count -lt 7) { $rows.Add(@($k, $v)) } }
+  $st = switch ($Item.s) { 'w' { 'working' } 'a' { 'waiting' } 'i' { 'idle' } default { 'offline' } }
+  & $add 'Status' $(if ($Item.a -gt 0) { "$st, $(Format-Age ($Now - [int64]$Item.a))" } else { $st })
+  $ids = if ($IsLocal) { @($Item.Desk.Bridges) + @($Item.Reg.Bridge) } else { @($Item.Id) }
+  $ri = Get-RemoteInfo $Info $ids
+  if ($IsLocal) {
+    & $add 'Where' $(if ($Item.Desk) { 'this PC' } else { 'this PC (terminal)' })
+    $cwd = if ($Item.Desk.Cwd) { $Item.Desk.Cwd } else { $Item.Reg.Cwd }
+    & $add 'Project' $(if ($cwd) { Split-Path $cwd -Leaf } elseif ($ri.Repo) { $ri.Repo })
+  } else {
+    & $add 'Where' $(if ($RemoteLabel) { $RemoteLabel } else { 'remote' })
+    & $add 'Project' $ri.Repo
+  }
+  & $add 'Branch' $ri.Branch
+  $model = if ($Item.Desk.Model) { $Item.Desk.Model } else { $ri.Model }
+  $effort = if ($Item.Desk.Effort) { $Item.Desk.Effort } else { $ri.Effort }
+  if ($model) { & $add 'Model' ((($model -replace '^claude-', '') + $(if ($effort) { ", $effort" })) ) }
+  if ($ri.Max -gt 0) {
+    & $add 'Context' ('{0} / {1} ({2}%)' -f (Format-Tokens $ri.Used), (Format-Tokens $ri.Max), [int][Math]::Round(100 * $ri.Used / $ri.Max))
+  }
+  $created = if ($Item.Desk.Created -gt 0) { $Item.Desk.Created } else { [int64]$ri.Created }
+  if ($created -gt 0) {
+    # Turns hinten an die Startzeit (sonst fiele die Zeile bei 7 Zeilen weg).
+    $started = [DateTimeOffset]::FromUnixTimeSeconds($created).ToLocalTime().ToString('MMM d, HH:mm', [Globalization.CultureInfo]::InvariantCulture)
+    if ($Item.Desk.Turns -gt 0) { $started += ", $($Item.Desk.Turns) turns" }
+    & $add 'Started' $started
+  }
+  return , $rows.ToArray()
+}
+
+# Langer Druck auf eine Session: Detailblatt an das Display. Ins Log nie den Titel.
+function Send-Detail($Port, $Msg, $Shown, $LocalItems, $Remote, $Info) {
+  $hit = Find-TappedItem $Msg $Shown $LocalItems $Remote
+  $r = [ordered]@{ t = 'detail'; n = [string]$Msg.n; r = @() }
+  if ($hit) {
+    $isLocal = @($LocalItems) -contains $hit
+    $r.s = $hit.s
+    $r.r = Get-DetailRows $hit $isLocal $Labels[2] $Info ([DateTimeOffset]::UtcNow.ToUnixTimeSeconds())
+  }
+  Send-Line $Port ($r | ConvertTo-Json -Compress -Depth 4)
+}
+
 # Tippen auf eine Session am Display: in Claude Desktop öffnen (Deep-Links der App, auch für
 # Remote-Sessions). Das Board schickt Seite, Zeile und
 # angezeigten Titel. Auf Seite 1/2 gilt die Zeile der zuletzt gebauten Liste, wenn der Titel
 # passt; sonst (Liste inzwischen geändert) wird nach dem Titel gesucht, bei gleichem Titel die
 # wartende bzw. zuletzt aktive. Ins Log nur Seite, Zeile und Tipp-Position, nie den Titel.
 function Open-Session($Msg, $Shown, $LocalItems, $Remote) {
-  $p = [int]$Msg.p
-  $i = [int]$Msg.i
-  $hit = $null
-  if ($p -in 1, 2 -and $i -ge 0 -and $i -lt @($Shown[$p]).Count) {
-    $c = @($Shown[$p])[$i]
-    if ((Get-ShownTitle $c.n) -ceq [string]$Msg.n) { $hit = $c }
-  }
-  if (-not $hit) {
-    $pool = switch ($p) {
-      0 { @(@($LocalItems) + @($Remote) | Where-Object { $_ -and $_.s -in 'a', 'w' }) }
-      1 { @($LocalItems) }
-      2 { @($Remote) }
-      default { @() }
-    }
-    $hit = @($pool | Where-Object { $_ -and (Get-ShownTitle $_.n) -ceq [string]$Msg.n } |
-        Sort-Object @{ e = { $_.s -eq 'a' }; Descending = $true }, @{ e = 'a'; Descending = $true }) |
-      Select-Object -First 1
-  }
-  $where = "Seite $p, Zeile $i, Tipp bei $($Msg.x)/$($Msg.y)"
-  if (-not $hit) { Write-Log "Display: Session nicht gefunden ($where)"; return }
-  if (-not (Test-Openable $hit)) { Write-Log "Display: Session laesst sich nicht oeffnen, z. B. Terminal ($where)"; return }
+  $hit = Find-TappedItem $Msg $Shown $LocalItems $Remote
+  $where = "page $([int]$Msg.p), row $([int]$Msg.i), tap at $($Msg.x -as [int])/$($Msg.y -as [int])"
+  if (-not $hit) { Write-Log "Display: session not found ($where)"; return }
+  if (-not (Test-Openable $hit)) { Write-Log "Display: session cannot be opened, e.g. terminal ($where)"; return }
   # Remote: Claude Desktop öffnet claude://claude.ai/code/<id> in seiner Ansicht für Remote-
   # Control-Sessions. Die API liefert cse_..., Links nutzen session_... (gleicher Rest).
   $url = if ($hit.Id -like 'local_*') { "claude://claude.ai/epitaxy/$($hit.Id)" }
   else { 'claude://claude.ai/code/' + ($hit.Id -replace '^cse_', 'session_') }
   Start-Process $url
-  Write-Log "Display: Session geoeffnet ($where)"
+  Write-Log "Display: session opened ($where)"
+}
+
+# Update-Prüfung: neuestes Release auf GitHub (asynchron, wie der Remote-Abruf).
+function Start-UpdateCheck($Http) {
+  $req = [Net.Http.HttpRequestMessage]::new([Net.Http.HttpMethod]::Get, "https://api.github.com/repos/$UpdateRepo/releases/latest")
+  $req.Headers.UserAgent.ParseAdd('ClaudeDisplay-collector')
+  $req.Headers.Accept.ParseAdd('application/vnd.github+json')
+  return $Http.SendAsync($req)
+}
+
+# Ergebnis: @{ Version; Url; Sha256 } für das Setup-ZIP des neuesten Releases, sonst $null.
+# Alles wird streng geprüft, weil es später update.ps1 als Argument bekommt.
+function Receive-UpdateCheck($Task) {
+  if (-not $Task.IsCompletedSuccessfully) { return $null }
+  $resp = $Task.Result
+  try {
+    if (-not $resp.IsSuccessStatusCode) { return $null }
+    $j = $resp.Content.ReadAsStringAsync().Result | ConvertFrom-Json -DateKind String
+    if ([string]$j.tag_name -notmatch '^v(\d+\.\d+\.\d+)$') { return $null }
+    $v = $Matches[1]
+    $a = @($j.assets | Where-Object { $_.name -eq "ClaudeDisplay-Setup-v$v.zip" }) | Select-Object -First 1
+    $url = [string]$a.browser_download_url
+    if ($url -ne "https://github.com/$UpdateRepo/releases/download/v$v/ClaudeDisplay-Setup-v$v.zip") { return $null }
+    if ([string]$a.digest -notmatch '^sha256:([0-9a-f]{64})$') { return $null }
+    return @{ Version = $v; Url = $url; Sha256 = $Matches[1] }
+  } catch {
+    return $null
+  } finally {
+    $resp.Dispose()
+  }
+}
+
+# Startet update.ps1 losgelöst vom Taskplaner-Task (über WMI), weil es den Collector beendet.
+function Start-Update($Release, [string]$PortName, [string]$Panel) {
+  if ($PortName -notmatch '^COM\d+$' -or $Panel -notin 'st7789', 'ili9341') { throw "unexpected port '$PortName' or panel '$Panel'" }
+  $script = Join-Path $PSScriptRoot 'update.ps1'
+  if (-not (Test-Path -LiteralPath $script)) { throw 'update.ps1 is missing (run install.ps1 once)' }
+  $pwsh = (Get-Process -Id $PID).Path
+  # conhost --headless wie beim Task: kein Konsolenfenster, das man versehentlich schließt.
+  $conhost = Join-Path $env:windir 'System32\conhost.exe'
+  $cmd = '"{0}" --headless "{1}" -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "{2}" -Version {3} -Url "{4}" -Sha256 {5} -Port {6} -Panel {7}' -f `
+    $conhost, $pwsh, $script, $Release.Version, $Release.Url, $Release.Sha256, $PortName, $Panel
+  $r = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = $cmd }
+  if ($r.ReturnValue -ne 0) { throw "could not start the updater (code $($r.ReturnValue))" }
 }
 
 # Gesperrt = der Sperrbildschirm (LogonUI.exe) läuft.
@@ -539,11 +697,12 @@ function Write-PortLog([string]$Name, [string]$Message) {
 
 # Das Board verwirft Zeilen über 1023 Byte; Listen kürzt Get-ListLine vorher selbst.
 function Send-Line($Port, [string]$Line) {
-  if ([Text.Encoding]::UTF8.GetByteCount($Line) -gt $MaxLine) { Write-Log "Zeile zu lang ($($Line.Length) Byte), verworfen"; return }
+  if ([Text.Encoding]::UTF8.GetByteCount($Line) -gt $MaxLine) { Write-Log "Line too long ($($Line.Length) bytes), dropped"; return }
   $Port.Write($Line + "`n")
 }
 
-function Get-StateLine($Usage, [int64]$FetchedAt, [string]$ErrorText, $Forecast, [bool]$Locked, [string]$Dots, $Sess) {
+function Get-StateLine($Usage, [int64]$FetchedAt, [string]$ErrorText, $Forecast, [bool]$Locked, [string]$Dots, $Sess,
+  [string]$Update, [bool]$Updating) {
   $state = [ordered]@{
     t   = 'state'
     now = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
@@ -567,6 +726,8 @@ function Get-StateLine($Usage, [int64]$FetchedAt, [string]$ErrorText, $Forecast,
   $state.lock = [int]$Locked
   $state.d = $Dots
   if ($Sess) { $state.x = $Sess }
+  if ($Update) { $state.u = $Update }
+  if ($Updating) { $state.ux = 1 }
   return ($state | ConvertTo-Json -Compress -Depth 4)
 }
 
@@ -619,9 +780,9 @@ New-Item -ItemType Directory -Force -Path $DataDir | Out-Null
 
 $mutex = [Threading.Mutex]::new($false, 'Local\ClaudeUsageDisplayCollector')
 try { $owned = $mutex.WaitOne(0) } catch [Threading.AbandonedMutexException] { $owned = $true }
-if (-not $owned) { Write-Log 'Collector laeuft bereits, beende diese Instanz.'; exit 0 }
+if (-not $owned) { Write-Log 'Collector already running, exiting this instance.'; exit 0 }
 
-Write-Log "Collector gestartet (PID $PID, CLI: $(Find-ClaudeExe))"
+Write-Log "Collector started (PID $PID, CLI: $(Find-ClaudeExe))"
 
 # Unter dem Taskplaner ist "conhost --headless" der Elternprozess. Stoppt man den Task,
 # endet nur conhost; dann beendet sich auch der Collector und gibt den Port frei.
@@ -672,7 +833,7 @@ try {
   }
   $FixedPort = ([string]$cfg.port).Trim().ToUpperInvariant()
 } catch { }  # keine oder ungültige config.json: Standardtitel, Port automatisch
-if ($FixedPort) { Write-Log "Fester Port: $FixedPort" }
+if ($FixedPort) { Write-Log "Fixed port: $FixedPort" }
 
 $remote = @()           # letzte gute Remote-Liste (andere Rechner)
 $remoteAt = [int64]0
@@ -683,6 +844,15 @@ $busyLocal = @{}         # lokale Session -> arbeitet seit (Unix-s), für den Hi
 $busyRemote = @{}        # Remote-Session -> arbeitet seit (Nummer des Abrufs)
 $remoteFetches = [int64]0
 $donePending = $false
+$remoteInfo = @{}        # Angaben fürs Detailblatt je Session (aus dem letzten Remote-Abruf)
+$fwVersion = ''          # Firmware und Panel des Displays (aus ack/hello)
+$fwPanel = ''
+$latest = $null          # neuestes Release auf GitHub (Receive-UpdateCheck)
+$updateTask = $null
+$nextUpdateCheck = [DateTime]::UtcNow.AddSeconds(30)
+$updateNote = ''         # schon geloggte Update-Version
+$updating = $false
+$updatingSince = [DateTime]::MinValue
 $lines = @{}            # zuletzt gebaute list-Zeilen
 $shown = @{ 1 = @(); 2 = @() }  # deren Sessions in Anzeigereihenfolge (für Open-Session)
 $pending = [Collections.Generic.List[string]]::new()  # davon noch zu senden
@@ -691,7 +861,7 @@ $stateSent = $false
 try {
   while ($true) {
     $now = [DateTime]::UtcNow
-    if ($parent -and $parent.HasExited) { Write-Log 'Task gestoppt'; break }
+    if ($parent -and $parent.HasExited) { Write-Log 'Task stopped'; break }
 
     # Usage alle 2 min; die CLI läuft nebenher, die Schleife bedient weiter Sessions und Display.
     $u = $null
@@ -722,20 +892,20 @@ try {
         }
         if (($fc | ConvertTo-Json -Compress) -ne ($forecast | ConvertTo-Json -Compress)) { $nextSend = [DateTime]::UtcNow }
         $forecast = $fc
-        if ($err) { Write-Log 'Abruf wieder erfolgreich'; $err = ''; $changed = $true }
+        if ($err) { Write-Log 'Usage fetch working again'; $err = ''; $changed = $true }
         if ($changed) {
           $s = if ($usage.Session) { $usage.Session.p } else { '?' }
           $w = if ($usage.Week) { $usage.Week.p } else { '?' }
           $f = if ($forecast.s -and $forecast.s.f -gt 0) {
-            ', Limit ca. {0:HH:mm}' -f [DateTimeOffset]::FromUnixTimeSeconds($forecast.s.f).ToLocalTime()
-          } elseif ($forecast.s -and $null -ne $forecast.s.e) { ", ca. $($forecast.s.e) % bis Reset" }
-          Write-Log "Usage: Session $s %, Woche $w %$f"
+            ', limit ~{0:HH:mm}' -f [DateTimeOffset]::FromUnixTimeSeconds($forecast.s.f).ToLocalTime()
+          } elseif ($forecast.s -and $null -ne $forecast.s.e) { ", ~$($forecast.s.e) % at reset" }
+          Write-Log "Usage: session $s %, week $w %$f"
           $nextSend = [DateTime]::UtcNow
         }
       } catch {
         $m = $_.Exception.GetBaseException().Message
         $e = Format-DisplayError $m
-        if ($e -ne $err) { Write-Log "Abruf fehlgeschlagen: $m"; $err = $e; $nextSend = [DateTime]::UtcNow }
+        if ($e -ne $err) { Write-Log "Usage fetch failed: $m"; $err = $e; $nextSend = [DateTime]::UtcNow }
       }
     }
 
@@ -748,7 +918,7 @@ try {
         $l = Test-ScreenLocked
         if ($l -ne $locked) {
           $locked = $l
-          Write-Log $(if ($locked) { 'Bildschirm gesperrt' } else { 'Bildschirm entsperrt' })
+          Write-Log $(if ($locked) { 'Screen locked' } else { 'Screen unlocked' })
           $nextSend = [DateTime]::UtcNow
         }
         $own = @(@($usageFetch) + @($closing) | Where-Object { $_ } | ForEach-Object { $_.Proc.Id })
@@ -776,6 +946,7 @@ try {
         if ($res.ContainsKey('Items')) {
           $remote = $res.Items
           $remoteCtx = $res.Ctx
+          $remoteInfo = $res.Info
           # Hinweis "fertig" für Remote: mindestens zwei Abrufe in Folge "arbeitet" (ca. 30 s).
           $remoteFetches++
           $cur = @($remote | Where-Object Connected | ForEach-Object { @{ Key = $_.Id; s = $_.s } })
@@ -785,10 +956,26 @@ try {
         }
         $e = [string]$res.Err
         if ($e -ne $remoteErr) {
-          Write-Log $(if ($e) { "Remote-Sessions nicht abrufbar: $($res.Detail)" } else { 'Remote-Sessions wieder abrufbar' })
+          Write-Log $(if ($e) { "Remote sessions unavailable: $($res.Detail)" } else { 'Remote sessions available again' })
           $remoteErr = $e
         }
         $remoteDirty = $true
+      }
+
+      # Update: alle $UpdateHours Stunden nach einem neuen Release fragen (asynchron).
+      if (-not $updateTask -and $now -ge $nextUpdateCheck) {
+        $nextUpdateCheck = $now.AddHours($UpdateHours)
+        $updateTask = Start-UpdateCheck $http
+      }
+      if ($updateTask -and $updateTask.IsCompleted) {
+        $r = Receive-UpdateCheck $updateTask
+        $updateTask = $null
+        if ($r) { $latest = $r }
+      }
+      if ($updating -and $now -ge $updatingSince.AddMinutes($UpdateTimeoutMin)) {
+        Write-Log 'Update did not finish, see update.log'
+        $updating = $false
+        $nextSend = [DateTime]::UtcNow
       }
 
       if ($localDirty) {
@@ -818,6 +1005,17 @@ try {
       if ($m -ne $lastScanError) { Write-Log $m; $lastScanError = $m }
     }
 
+    # Update-Banner: neueres Release als die Firmware (nur wenn Version und Panel bekannt sind).
+    $updateVer = ''
+    if ($latest -and $fwPanel -in 'st7789', 'ili9341') {
+      try { if ([version]$latest.Version -gt [version]$fwVersion) { $updateVer = $latest.Version } } catch { }
+    }
+    if ($updateVer -and $updateVer -ne $updateNote) {
+      Write-Log "Update available: v$updateVer (display runs v$fwVersion)"
+      $updateNote = $updateVer
+      $nextSend = [DateTime]::UtcNow
+    }
+
     if (-not $port) {
       if ($now -ge $nextScan) {
         $nextScan = $now.AddSeconds(3)
@@ -839,7 +1037,7 @@ try {
             Reset-Pending
             break
           } catch {
-            Write-PortLog $name "Port $name nicht verfuegbar: $($_.Exception.Message)"
+            Write-PortLog $name "Port $name not available: $($_.Exception.Message)"
           }
         }
       }
@@ -848,7 +1046,7 @@ try {
         if ($now -ge $nextPresence) {
           $nextPresence = $now.AddSeconds(2)
           if (-not $port.IsOpen -or [IO.Ports.SerialPort]::GetPortNames() -notcontains $port.PortName) {
-            throw 'Port nicht mehr vorhanden'
+            throw 'port no longer present'
           }
         }
         $rx += $port.ReadExisting()
@@ -859,17 +1057,31 @@ try {
           try { $msg = $line | ConvertFrom-Json } catch { continue }
           if (-not $verified -and $msg.t -in 'ack', 'hello') {
             $verified = $true
-            Write-Log "Display verbunden ($($port.PortName))"
+            Write-Log "Display connected ($($port.PortName))"
             $badPorts.Remove($port.PortName)
             $portLog.Remove($port.PortName)
           }
+          if ($msg.t -in 'ack', 'hello' -and $msg.fw) {
+            $fwVersion = Format-Board ([string]$msg.fw)
+            $fwPanel = [string]$msg.pn
+          }
           if ($msg.t -eq 'hello') {
-            Write-Log "Display gestartet (Firmware $($msg.fw))"
+            Write-Log "Display started (firmware $fwVersion)"
             $nextSend = [DateTime]::UtcNow
             Reset-Pending
           } elseif ($msg.t -eq 'open' -and $verified) {
             # Fehler hier dürfen nicht als Verbindungsabbruch gelten (äußerer catch).
-            try { Open-Session $msg $shown $localItems $remote } catch { Write-Log "Display: Oeffnen fehlgeschlagen: $($_.Exception.Message)" }
+            try { Open-Session $msg $shown $localItems $remote } catch { Write-Log "Display: opening failed: $($_.Exception.Message)" }
+          } elseif ($msg.t -eq 'detail' -and $verified) {
+            try { Send-Detail $port $msg $shown $localItems $remote $remoteInfo } catch { Write-Log "Display: details failed: $($_.Exception.Message)" }
+          } elseif ($msg.t -eq 'update' -and $verified -and $updateVer -and -not $updating) {
+            try {
+              Start-Update $latest $port.PortName $fwPanel
+              $updating = $true
+              $updatingSince = [DateTime]::UtcNow
+              $nextSend = [DateTime]::UtcNow
+              Write-Log "Update to v$($latest.Version) started from the display (log: update.log)"
+            } catch { Write-Log "Update could not be started: $($_.Exception.Message)" }
           }
         }
         if ($rx.Length -gt 4096) { $rx = '' }
@@ -879,10 +1091,10 @@ try {
           try { $port.Dispose() } catch { }
           $port = $null
           $badPorts[$name] = [DateTime]::UtcNow.AddMinutes($BadPortMinutes)
-          Write-PortLog $name "Kein Display an $name (keine Antwort)"
+          Write-PortLog $name "No display on $name (no answer)"
           $nextScan = [DateTime]::UtcNow.AddSeconds(3)
         } elseif ([DateTime]::UtcNow -ge $nextSend) {
-          Send-Line $port (Get-StateLine $usage $fetchedAt $err $forecast $locked $dots $sessLine)
+          Send-Line $port (Get-StateLine $usage $fetchedAt $err $forecast $locked $dots $sessLine $updateVer $updating)
           $nextSend = [DateTime]::UtcNow.AddSeconds($HeartbeatSeconds)
           $stateSent = $true
         } elseif ($verified -and $donePending) {
@@ -897,8 +1109,8 @@ try {
         }
       } catch {
         $m = $_.Exception.Message
-        if ($verified) { Write-Log "Display getrennt ($($port.PortName)): $m" }
-        else { Write-PortLog $port.PortName "Port $($port.PortName) nicht verfuegbar: $m" }
+        if ($verified) { Write-Log "Display disconnected ($($port.PortName)): $m" }
+        else { Write-PortLog $port.PortName "Port $($port.PortName) not available: $m" }
         try { $port.Dispose() } catch { }
         $port = $null
         $nextScan = [DateTime]::UtcNow.AddSeconds(1)
@@ -912,5 +1124,5 @@ try {
   if ($usageFetch) { Close-UsageFetch $usageFetch }
   Remove-ClosedUsageFetch -Wait
   $mutex.ReleaseMutex()
-  Write-Log 'Collector beendet'
+  Write-Log 'Collector stopped'
 }

@@ -38,7 +38,7 @@ Remote Control list     ─┘    PowerShell 7)
 > install or use the CLI yourself.
 
 > Unofficial community project, not affiliated with or endorsed by Anthropic. Claude is a
-> trademark of Anthropic. The display texts are in English; the collector's log is in German.
+> trademark of Anthropic.
 
 ## Requirements
 
@@ -65,6 +65,7 @@ Remote Control list     ─┘    PowerShell 7)
 | `host/collector.ps1` | Background process: usage, forecast, sessions, `latest.json`, serial |
 | `host/claude-cli.ps1` | Finds the Claude CLI (used by `collector.ps1` and the install scripts) |
 | `host/install.ps1` | Sets up autostart (Task Scheduler, no admin) and signs in the CLI |
+| `host/update.ps1` | Self-update, started from the display's update banner (download, checksum, flash, reinstall) |
 | `host/uninstall.ps1` | Undoes everything |
 | `setup/` | Setup assistant for the release ZIP (`Setup.cmd`, `Setup.ps1`, `Uninstall.cmd`, `README.txt`) |
 | `docs/images/` | Logo and the screenshots in this README |
@@ -171,7 +172,7 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File .\host\install.ps1
 
 The script
 
-1. copies `collector.ps1` and `claude-cli.ps1` to `%USERPROFILE%\.usage-display\`,
+1. copies `collector.ps1`, `claude-cli.ps1` and `update.ps1` to `%USERPROFILE%\.usage-display\`,
 2. creates the task **"Claude Usage Display"**. It starts at logon via
    `conhost --headless`, so without a visible window,
 3. signs in the Claude Code CLI bundled with Claude Desktop if it is not signed in yet
@@ -297,6 +298,18 @@ opened; tapping them, the header, the footer or an empty area switches to the ne
 
 **Switching pages:** swipe left for the next page, right for the previous one.
 
+**Details (long press):** hold a session row or the session line for about half a second.
+A detail sheet shows status and age, where it runs (this PC, terminal, or the remote page's
+title), project (local: folder name; remote: repository), branch, model and effort, context
+(e.g. "512k / 1M (51%)") and start time (for Claude Desktop sessions with the number of
+turns). Remote sessions get their details from the Remote Control session list, so this
+works for sessions on other machines too. Any tap closes the sheet; it also closes after
+30 s.
+
+**Limit warning:** from 90 % the ring of the session or week gauge pulses, and the display
+flashes twice when a value crosses 90 %. At 100 % the forecast line says "Limit reached".
+When a new window starts, it shows "New 5h window" or "New week" for a minute.
+
 **"Done" flash:** when a session that worked for at least 10 s finishes (idle or waiting
 for you), the whole screen inverts for a quarter of a second. Not while Windows is locked.
 Remote sessions are only fetched every 30 s: they flash if two fetches in a row saw them
@@ -307,11 +320,34 @@ working (so after about 30 s of work or more), and up to 30 s late.
 - **"Offline":** no message from the host for 90 s ("No data for …"). The last known
   values are shown at the bottom.
 - **`--`:** value unknown, e.g. before the first successful fetch.
+- **Update banner:** see [Updates](#updates).
 - **Brightness:** always 100 %; while Windows is locked the backlight is off. (The light
   sensor is not used: inside a case it reads "dark" even in a normally lit room.)
 
 The screenshots are read straight from a real display (debug build with `-DSCREENSHOT`)
 that was fed demo sessions.
+
+## Updates
+
+Every 6 hours the collector asks GitHub for the latest release of this project. If it is
+newer than the firmware on the display, the footer of the home page shows "Update x.y.z"
+on the right. Tap it (right half of the footer), then tap again within 5 s ("Tap again to
+update") to start the update. Firmware built with your own panel flags (`ROTATION`,
+`PANEL_INVERT`, `PANEL_SWAP_RB`, `TOUCH_ROTATION`) reports itself as "custom" and gets no
+banner, because the release images would replace your flags; update those by hand.
+The footer then says "Updating...". `host/update.ps1` runs on its own:
+
+1. downloads the release's setup ZIP and checks its SHA256 against the value GitHub lists
+   for the file,
+2. downloads Espressif's official esptool 4.12.0 (SHA256-checked, removed afterwards),
+3. stops the collector and flashes the firmware for your panel type (the display reports it),
+4. installs the new collector (`install.ps1 -NoLogin`; your `config.json` is kept) and starts it.
+
+The display restarts once during this; after about a minute it shows your data again, with
+the new version. If anything fails, the previous collector keeps running and
+`%USERPROFILE%\.usage-display\update.log` says why. You can always update by hand with
+`Setup.cmd` from the new release ZIP. The device itself never goes online; only the PC talks
+to GitHub.
 
 ## Troubleshooting
 
@@ -320,17 +356,18 @@ that was fed demo sessions.
 | Footer "Not signed in: claude auth login" | Run `install.ps1` again; it starts the login |
 | Footer "Claude CLI not found" | Is Claude Desktop installed and has its Code tab been opened at least once? The desktop app downloads its bundled CLI there |
 | "Waiting for data" stays on screen | Is the task running? `Get-ScheduledTask 'Claude Usage Display'`; also check `collector.log` |
-| Log: "Port COMx nicht verfuegbar: Access … denied" (port not available) | Another program holds the port (serial monitor, PlatformIO upload, a second collector). The collector retries every 3 s |
+| Log: "Port COMx not available: Access … denied" | Another program holds the port (serial monitor, PlatformIO upload, a second collector). The collector retries every 3 s |
 | Display is not found | Device Manager: does "USB-SERIAL CH340 (COMx)" or "CP210x (COMx)" show up? If not, install the chip's driver (WCH CH341SER or Silicon Labs CP210x). Charge-only cable? |
 | Board restarts when the port is opened | Happens occasionally (DTR/RTS auto-reset circuit). Harmless: the board sends `hello` and the collector immediately sends the current state |
 | Wrong colors or mirrored image | Check panel type and build flags (`PANEL_INVERT`, `PANEL_SWAP_RB`, `ROTATION`), see setup step 2 |
-| Log: "Kein Display an COMx (keine Antwort)" (no display, no answer) | Another USB serial device is on that port, or the board does not run this firmware yet. Flash the firmware or set `install.ps1 -Port COMx` |
+| Log: "No display on COMx (no answer)" | Another USB serial device is on that port, or the board does not run this firmware yet. Flash the firmware or set `install.ps1 -Port COMx` |
 | White screen | SPI clock too high. It is set to 27 MHz in `lgfx_cyd.h`; above about 32 MHz the panel initialisation fails on some boards |
 | PlatformIO install fails with `CERTIFICATE_VERIFY_FAILED` | A proxy with TLS inspection (common in corporate networks) intercepts the connection. Install outside that network or point `REQUESTS_CA_BUNDLE` to the corporate certificate |
 | Numbers differ briefly from claude.ai | The fetch runs every 2 minutes; "@ HH:MM" at the bottom tells you how current they are |
 | Remote page: "No CLI login" / "List: login expired" | The CLI login is missing or expired: run `install.ps1` again |
 | Remote page: "List unavailable" | No network, or the internal interface has changed. The last list stays on screen |
 | Remote page stays empty | Remote Control is not enabled on the other machine, or it uses a different Claude account |
+| Update banner: "Updating..." disappears, old version still there | See `%USERPROFILE%\.usage-display\update.log`. Typical causes: no network, the port was busy, or flashing failed (then run `Setup.cmd` from the new release ZIP) |
 | Display stays dark although unlocked | "Locked" means `LogonUI.exe` is running. After unlocking, the next update arrives within 2 s |
 
 The log is kept short: start, connect, disconnect, changed values, errors. Repeated
@@ -376,6 +413,13 @@ session can be opened on the PC (not for terminal sessions), `c` = context windo
 (missing = unknown). Optional `err`
 (error while fetching) and `l` (custom page title, max. 14 characters).
 
+`state` also carries `u` = version of a newer release on GitHub (missing = none) and
+`ux` = `1` while the host is updating; the board then shows the update banner.
+
+`{"t":"detail","n":"Refactoring API client","s":"w","r":[["Status","working, now"],["Model","opus-5-5, max"]]}`:
+answer to a detail request: shown title `n`, status `s` and up to 7 rows `r` of
+[key, value] (ASCII, value max. 40 characters). `r` is empty if the session is unknown.
+
 `{"t":"done"}`: a session that worked for at least 10 s (remote: in two fetches in a row) has
 finished; the display inverts for 250 ms. Not sent while Windows is locked.
 
@@ -383,13 +427,15 @@ finished; the display inverts for 250 ms. Not sent while Windows is locked.
 
 | Message | When |
 |---|---|
-| `{"t":"hello","fw":"2.6.0"}` | After start-up. The host immediately sends `state` and both `list` |
-| `{"t":"ack","s":17.0,"w":24.0,"b":255}` | After every `state`: the accepted values and the target brightness `b` (255, or 0 while locked) |
+| `{"t":"hello","fw":"2.7.0","pn":"st7789"}` | After start-up, with firmware version and panel type. The host immediately sends `state` and both `list` |
+| `{"t":"ack","s":17.0,"w":24.0,"b":255,"fw":"2.7.0","pn":"st7789"}` | After every `state`: the accepted values, the target brightness `b` (255, or 0 while locked), firmware version and panel type (for the update) |
+| `{"t":"detail","p":1,"i":2,"n":"Refactoring API client"}` | A session was held (long press), same fields as `open`. The host answers with `detail` |
+| `{"t":"update"}` | The update banner was tapped twice. The host starts `update.ps1` |
 | `{"t":"open","p":1,"i":2,"n":"Refactoring API client","x":160,"y":95}` | A session was tapped: page `p`, row `i` (`-1` = session line), shown title `n`, tap position `x`/`y`. The host takes row `i` of the list it last sent if the title matches (otherwise it searches by title) and opens `claude://claude.ai/epitaxy/<id>` (local) or `claude://claude.ai/code/<id>` (remote, `cse_` becomes `session_`) in Claude Desktop. It logs page, row and position, never the title |
 
 **Timing:** usage every 120 s (in the background), local sessions every 2 s (Claude Desktop
 session files every 4 s), remote list every 30 s, lock
-state every 2 s, heartbeat every 30 s, offline screen after 90 s without `state`.
+state every 2 s, heartbeat every 30 s, offline screen after 90 s without `state`, release check every 6 h.
 The board computes the countdowns itself from `r` and the clock set by the host.
 
 ## Uninstall

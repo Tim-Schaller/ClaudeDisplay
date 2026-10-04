@@ -14,7 +14,7 @@ $ErrorActionPreference = 'Stop'
 $Repo = Split-Path -Parent $PSScriptRoot
 $Fw = Join-Path $Repo 'firmware'
 $Dist = Join-Path $Repo 'dist'
-$Version = [regex]::Match((Get-Content (Join-Path $Fw 'src\app\main.cpp') -Raw), 'FW_VERSION = "([^"]+)"').Groups[1].Value
+$Version = [regex]::Match((Get-Content (Join-Path $Fw 'src\app\main.cpp') -Raw), '#define\s+FW_VERSION_STR\s+"([^"]+)"').Groups[1].Value
 if (-not $Version) { throw 'FW_VERSION nicht gefunden' }
 if (-not $Pio) { $Pio = (Get-Command pio -ErrorAction SilentlyContinue).Source }
 if (-not $Pio) { $Pio = Join-Path $env:USERPROFILE '.platformio\penv\Scripts\pio.exe' }

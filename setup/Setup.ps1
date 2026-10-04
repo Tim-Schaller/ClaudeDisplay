@@ -145,8 +145,8 @@ if (-not $SkipFlash) {
     $image = Join-Path $Root "firmware\claude-display-$v.bin"
     Invoke-Esptool @('--chip', 'esp32', '--port', $Port, '--baud', '460800', 'write_flash', '0x0', $image)
     Start-Sleep 3
-    if (Confirm-Step ("Does the display show a gray circle with '!' and below it 'Warte auf Daten' " +
-          "(waiting for data) on a BLACK background, readable and not mirrored?")) { $ok = $true; break }
+    if (Confirm-Step ("Does the display show a gray circle with '!' and below it 'Waiting for data' " +
+          "on a BLACK background, readable and not mirrored?")) { $ok = $true; break }
   }
   if (-not $ok) {
     Write-Host ('Neither variant fits. The firmware can be adjusted with build flags (inversion, ' +

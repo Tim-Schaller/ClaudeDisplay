@@ -43,6 +43,8 @@ static const int FOOT_DOTS = 24;
 static const int64_t WAIT_ALERT_S = 600;  // so lange wartet eine Session, bis die Zeit rot wird
 static const uint32_t FLASH_MS = 400;     // getippte Zeile so lange hervorheben
 static const uint32_t C_FLASH = 0x334155; // Hintergrund der getippten Zeile
+static const uint32_t NEW_WINDOW_MS = 60000;  // so lange "New 5h window" bzw. "New week"
+static const int DETAIL_Y = BAR_H + 2, DETAIL_ROW_H = 22, DETAIL_VAL_X = 96;
 
 // Standardtitel; für Seite 1/2 kann der Host einen eigenen Titel mitschicken (list.l).
 static const char *const PAGE_TITLE[3] = {"Claude Usage", "Local", "Remote"};
@@ -120,8 +122,17 @@ static void fmtCountdown(char *out, size_t n, const Window &w, int64_t now) {
 
 // Prognose: "Limit ~HH:MM" (mehr als 20 h voraus mit Wochentag), "~64% @ Reset"
 // (hochgerechneter Stand beim Reset) oder leer (zu wenig Daten). Liefert die Textfarbe.
-static uint32_t fmtForecast(char *out, size_t n, const Window &w, int64_t now, int tzMin) {
+static uint32_t fmtForecast(char *out, size_t n, const Window &w, int64_t now, int tzMin,
+                            const char *newText) {
   out[0] = 0;
+  if (w.newAt && millis() - w.newAt < NEW_WINDOW_MS) {
+    snprintf(out, n, "%s", newText);
+    return C_GREEN;
+  }
+  if (w.pct >= 100) {
+    snprintf(out, n, "Limit reached");
+    return C_RED;
+  }
   if (w.forecast < 0) return C_DIM;
   if (w.forecast == 0) {
     if (w.expect >= 0) {
@@ -215,7 +226,7 @@ static void animateDots(bool pulse, bool blink) {
   if (gHl != HIT_SESSION && ((sessSt == 'w' && pulse) || (sessSt == 'a' && blink))) {
     pushDot(14, SESS_Y + BAR_H / 2, 5, sessSt);
   }
-  for (int i = 0; i < footN; i++) {
+  for (int i = 0; gHl != HIT_UPDATE && i < footN; i++) {
     if ((footSt[i] == 'w' && pulse) || (footSt[i] == 'a' && blink)) {
       pushDot(footX[i], FOOTER_Y + BAR_H / 2, 4, footSt[i]);
     }
@@ -271,12 +282,14 @@ static void drawRing(float pct, uint32_t color) {
   }
 }
 
+// dim: Puls-Phase der Limit-Warnung (Ring abgedunkelt).
 static void renderGauge(int x, const char *title, const Window &w, const char *reset,
-                        const char *forecast, uint32_t fcColor) {
+                        const char *forecast, uint32_t fcColor, bool dim) {
   const bool known = w.pct >= 0;
   const float p = known ? fminf(fmaxf(w.pct, 0), 100) : 0;
   gauge.fillSprite(C_BG);
-  drawRing(p, levelColor(known ? w.pct : 0));
+  const uint32_t ring = levelColor(known ? w.pct : 0);
+  drawRing(p, dim ? blend(ring, C_TRACK, 0.6f) : ring);
 
   char num[8];
   if (known) {
@@ -403,12 +416,13 @@ static void renderFooter(const char *text, uint32_t color, const char *right) {
   footN = 0;
 }
 
-// Dots-Leiste (ein Dot je Session, '|' = Lücke mit Trennlinie) und rechts der Datenstand.
-static void renderDotsFooter(const char *dots, const char *right) {
-  bar.fillSprite(C_BG);
+// Dots-Leiste (ein Dot je Session, '|' = Lücke mit Trennlinie) und rechts der Datenstand bzw.
+// das Update-Banner (accent: größer, orange). hl: gerade getippt.
+static void renderDotsFooter(const char *dots, const char *right, bool accent, bool hl) {
+  bar.fillSprite(hl ? C_FLASH : C_BG);
   bar.setTextDatum(middle_right);
-  bar.setFont(&fonts::Font0);
-  bar.setTextColor(C_DIM);
+  bar.setFont(accent ? static_cast<const lgfx::IFont *>(&fonts::FreeSans9pt7b) : &fonts::Font0);
+  bar.setTextColor(accent ? C_AMBER : C_DIM);
   bar.drawString(right, W - 8, BAR_H / 2);
   const int limit = W - 8 - bar.textWidth(right) - 8;  // Dots müssen links davon enden
   footN = 0;
@@ -475,6 +489,55 @@ static void fmtSummary(char *out, size_t n, const SessionList &l) {
   if (!out[0] && l.n) snprintf(out, n, "none active");
 }
 
+static void clearContent();
+
+// Detailblatt: Titel mit Status-Dot, darunter die Schlüssel/Wert-Zeilen vom Host.
+static void renderDetail(const DetailView &d) {
+  clearContent();
+  const bool pulse = gPulseOn, blink = gBlinkOn;
+  gPulseOn = gBlinkOn = true;  // Dot statisch in der An-Phase
+  bar.fillSprite(C_BG);
+  if (d.st) paintDot(bar, 14, BAR_H / 2, 5, d.st);
+  gPulseOn = pulse;
+  gBlinkOn = blink;
+  bar.setFont(&fonts::FreeSansBold9pt7b);
+  bar.setTextDatum(middle_left);
+  bar.setTextColor(C_TEXT);
+  char title[sizeof d.title + 3];
+  strlcpy(title, d.title[0] ? d.title : "Untitled", sizeof d.title);
+  fitText(bar, title, W - 8 - 28, true);
+  bar.drawString(title, 28, BAR_H / 2);
+  bar.pushSprite(0, DETAIL_Y);
+  lcd.setFont(&fonts::FreeSans9pt7b);
+  lcd.setTextDatum(middle_left);
+  if (!d.have || d.n == 0) {
+    lcd.setTextColor(C_DIM);
+    lcd.drawString(d.have ? "No details available" : "Loading...", 28, DETAIL_Y + BAR_H + 20);
+    return;
+  }
+  for (int i = 0; i < d.n && i < DETAIL_MAX; i++) {
+    const int y = DETAIL_Y + BAR_H + 4 + i * DETAIL_ROW_H + DETAIL_ROW_H / 2;
+    lcd.setTextColor(C_DIM);
+    lcd.drawString(d.key[i], 12, y);
+    char val[sizeof d.val[0] + 3];
+    strlcpy(val, d.val[i], sizeof d.val[0]);
+    fitText(lcd, val, W - 8 - DETAIL_VAL_X, true);
+    lcd.setTextColor(C_TEXT);
+    lcd.drawString(val, DETAIL_VAL_X, y);
+  }
+}
+
+// Prüfsumme über das Detailblatt (neu zeichnen nur bei Änderung).
+static uint32_t detailSig(const DetailView &d) {
+  uint32_t h = 2166136261u;
+  auto mix = [&h](const char *s) { for (; *s; s++) h = (h ^ (uint8_t)*s) * 16777619u; h = (h ^ 0xFF) * 16777619u; };
+  mix(d.title);
+  char head[8] = {d.st ? d.st : '-', d.have ? 'h' : '-', (char)('0' + d.n), 0};
+  mix(head);
+  for (int i = 0; i < d.n && i < DETAIL_MAX; i++) { mix(d.key[i]); mix(d.val[i]); }
+  return h;
+}
+
 // --- Offline/Warten --------------------------------------------------------
 
 static void clearContent() { lcd.fillRect(0, BAR_H, W, FOOTER_Y - BAR_H, C_BG); }
@@ -528,16 +591,20 @@ bool uiTouch(int *x, int *y) {
 // Öffnen lässt sich nur, was gerade zu sehen ist und laut Host einen Link hat (nicht z. B.
 // Terminal-Sessions): auf Seite 0 die Session-Zeile mit wartender bzw. arbeitender
 // Session, auf Seite 1/2 eine belegte Listenzeile. Alles andere wechselt die Seite.
-int uiHit(const ViewModel &vm, int x, int y) {
-  if (vm.screen != Screen::Usage || x < 0 || x >= W) return HIT_NONE;
+int uiHit(const ViewModel &vm, int x, int y, bool needOpen) {
+  if (vm.screen != Screen::Usage || vm.detail.show || x < 0 || x >= W) return HIT_NONE;
   if (vm.page == 0) {
-    const bool shown = (vm.sess.st == 'a' || vm.sess.st == 'w') && vm.sess.open;
+    // Update-Banner: rechte Hälfte der Fußzeile (links stehen die Dots).
+    if (y >= FOOTER_Y) {
+      return needOpen && x >= W / 2 && vm.update[0] && !vm.updating && !vm.err[0] ? HIT_UPDATE : HIT_NONE;
+    }
+    const bool shown = (vm.sess.st == 'a' || vm.sess.st == 'w') && (vm.sess.open || !needOpen);
     return shown && y >= SESS_Y && y < SESS_Y + BAR_H ? HIT_SESSION : HIT_NONE;
   }
   const SessionList &l = vm.list[vm.page - 1];
   if (y < ROW_Y) return HIT_NONE;
   const int i = (y - ROW_Y) / ROW_H;
-  return i < l.n && i < LIST_MAX && l.item[i].open ? i : HIT_NONE;
+  return i < l.n && i < LIST_MAX && (l.item[i].open || !needOpen) ? i : HIT_NONE;
 }
 
 void uiInvert(bool on) {
@@ -557,6 +624,8 @@ void uiRender(const ViewModel &vm) {
   static uint8_t lastPage = 255;
   static char lastHeader[40], lastFooter[160], lastG[2][128], lastNotice[64], lastSess[80];
   static char lastRow[LIST_MAX][80], lastMode;
+  static bool lastDetail = false;
+  static uint32_t lastDetailSig = 0;
 
   // Animationsphase der Dots: w 600 ms an/gedimmt, a 300 ms an/aus.
   const uint32_t ms = millis();
@@ -566,10 +635,13 @@ void uiRender(const ViewModel &vm) {
   gBlinkOn = blink;
   gHl = ms - gTapAt < FLASH_MS ? gTapHit : HIT_NONE;
 
-  const bool full = vm.screen != lastScreen || vm.page != lastPage;
+  const bool detail = vm.detail.show && vm.screen == Screen::Usage;
+  const bool full = vm.screen != lastScreen || vm.page != lastPage || detail != lastDetail;
   if (full) {
     lastScreen = vm.screen;
     lastPage = vm.page;
+    lastDetail = detail;
+    lastDetailSig = 0;
     lcd.fillScreen(C_BG);
     lastHeader[0] = lastFooter[0] = lastG[0][0] = lastG[1][0] = lastNotice[0] = lastSess[0] = 0;
     for (auto &r : lastRow) r[0] = 0;
@@ -582,7 +654,7 @@ void uiRender(const ViewModel &vm) {
   // Kopfzeile: Uhrzeit (sobald der Host sie geliefert hat) und Online-Punkt.
   char clock[8] = "--:--";
   if (vm.now > 0) fmtHM(clock, sizeof clock, vm.now, vm.tzMin);
-  const char *title = pageTitle(vm);
+  const char *title = detail ? "Details" : pageTitle(vm);
   char header[sizeof lastHeader];
   snprintf(header, sizeof header, "%s%c%s", clock, vm.screen == Screen::Usage ? '+' : '-', title);
   if (strcmp(header, lastHeader) != 0) {
@@ -591,21 +663,31 @@ void uiRender(const ViewModel &vm) {
   }
 
   // Fußzeile: Text links (Farbe), rechts klein der Datenstand, auf Seite 0 statt Text Dots.
-  char footText[64] = "", stand[16] = "";
+  char footText[64] = "", stand[24] = "";
   uint32_t footColor = C_DIM;
   const char *footDots = nullptr;
+  bool footAccent = false;  // Update-Banner statt Datenstand
 
-  if (vm.screen == Screen::Usage && vm.page == 0) {
+  if (detail) {
+    const uint32_t sig = detailSig(vm.detail);
+    if (sig != lastDetailSig) {
+      lastDetailSig = sig;
+      renderDetail(vm.detail);
+    }
+    strcpy(footText, "Tap to close");
+  } else if (vm.screen == Screen::Usage && vm.page == 0) {
     const Window *win[2] = {&vm.session, &vm.week};
     static const char *const TITLE[2] = {"Session", "Week"};
+    static const char *const NEW_TEXT[2] = {"New 5h window", "New week"};
     for (int k = 0; k < 2; k++) {
       char reset[32], fc[32], sig[128];
       fmtCountdown(reset, sizeof reset, *win[k], vm.now);
-      const uint32_t fcColor = fmtForecast(fc, sizeof fc, *win[k], vm.now, vm.tzMin);
-      snprintf(sig, sizeof sig, "%.1f|%s|%s", win[k]->pct, reset, fc);
+      const uint32_t fcColor = fmtForecast(fc, sizeof fc, *win[k], vm.now, vm.tzMin, NEW_TEXT[k]);
+      const bool dim = win[k]->pct >= WARN_PCT && ms / 500 % 2;  // Limit-Warnung: Ring pulsiert
+      snprintf(sig, sizeof sig, "%.1f|%s|%s|%d", win[k]->pct, reset, fc, dim);
       if (strcmp(sig, lastG[k]) != 0) {
         strcpy(lastG[k], sig);
-        renderGauge(k * GW, TITLE[k], *win[k], reset, fc, fcColor);
+        renderGauge(k * GW, TITLE[k], *win[k], reset, fc, fcColor, dim);
       }
     }
     char wait[12] = "", sess[sizeof lastSess];
@@ -621,8 +703,17 @@ void uiRender(const ViewModel &vm) {
       snprintf(footText, sizeof footText, "%s", vm.err);
       footColor = C_AMBER;
     } else {
-      strcpy(stand, "@ --:--");
-      if (vm.fetchedAt > 0) fmtHM(stand + 2, sizeof stand - 2, vm.fetchedAt, vm.tzMin);
+      if (vm.updating) {
+        strcpy(stand, "Updating...");
+      } else if (vm.updateConfirm) {
+        strcpy(stand, "Tap again to update");
+      } else if (vm.update[0]) {
+        snprintf(stand, sizeof stand, "Update %s", vm.update);
+      } else {
+        strcpy(stand, "@ --:--");
+        if (vm.fetchedAt > 0) fmtHM(stand + 2, sizeof stand - 2, vm.fetchedAt, vm.tzMin);
+      }
+      footAccent = vm.updating || vm.updateConfirm || vm.update[0];
       footDots = vm.dots;
     }
   } else if (vm.screen == Screen::Usage) {
@@ -694,12 +785,13 @@ void uiRender(const ViewModel &vm) {
   }
 
   char footer[160];
-  snprintf(footer, sizeof footer, "%c%s|%06lx|%s|%s", footDots ? 'D' : 'T',
-           footDots ? footDots : "", (unsigned long)footColor, footText, stand);
+  const bool footHl = footDots && gHl == HIT_UPDATE;
+  snprintf(footer, sizeof footer, "%c%s|%06lx|%s|%s|%d%d", footDots ? 'D' : 'T',
+           footDots ? footDots : "", (unsigned long)footColor, footText, stand, footAccent, footHl);
   if (strcmp(footer, lastFooter) != 0) {
     strcpy(lastFooter, footer);
     if (footDots) {
-      renderDotsFooter(footDots, stand);
+      renderDotsFooter(footDots, stand, footAccent, footHl);
     } else {
       renderFooter(footText, footColor, stand);
     }

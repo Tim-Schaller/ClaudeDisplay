@@ -8,14 +8,46 @@
 
 #include "ui.h"
 
-static const char *FW_VERSION = "2.6.0";
+// Defaults wie in lgfx_cyd.h (hier nur für PANEL_NAME gebraucht).
+#ifndef ROTATION
+#define ROTATION 1
+#endif
+#ifndef PANEL_INVERT
+#define PANEL_INVERT 0
+#endif
+#ifndef PANEL_SWAP_RB
+#define PANEL_SWAP_RB 0
+#endif
+#ifndef TOUCH_ROTATION
+#define TOUCH_ROTATION 4
+#endif
+
+// Version per Build-Flag überschreibbar (z. B. -DFW_VERSION_STR=\"2.6.9\" zum Testen des Updates).
+#ifndef FW_VERSION_STR
+#define FW_VERSION_STR "2.7.0"
+#endif
+static const char *FW_VERSION = FW_VERSION_STR;
+// Für das Selbst-Update: welches Release-Image passt. Mit eigenen Panel-Flags gebaut ("custom")
+// passt keins, dann bietet der Host kein Update an (es würde die Flags überschreiben).
+#if ROTATION != 1 || PANEL_INVERT != 0 || PANEL_SWAP_RB != 0 || TOUCH_ROTATION != 4
+static const char *PANEL_NAME = "custom";
+#elif defined(PANEL_ILI9341)
+static const char *PANEL_NAME = "ili9341";
+#else
+static const char *PANEL_NAME = "st7789";
+#endif
 static const uint32_t OFFLINE_AFTER_MS = 90000;
 static const uint32_t FRAME_MS = 40;            // Bildaufbau (Dot-Animation braucht < 300 ms)
 static const uint32_t RELEASE_MS = 100;         // so lange ohne Kontakt = losgelassen
 static const int SWIPE_PX = 50;                 // waagrechter Weg für einen Wisch
 static const uint32_t PAGE_TIMEOUT_MS = 60000;  // ohne Touch zurück auf Seite 0
 static const uint32_t FADE_MS = 1000;
-static const uint32_t DONE_FLASH_MS = 250;  // Hinweis "Session fertig": so lange invertiert
+static const uint32_t DONE_FLASH_MS = 250;  // Blitz: so lange invertiert ...
+static const uint32_t FLASH_PERIOD_MS = 500;  // ... je Blitz (mit Pause)
+static const uint32_t LONG_MS = 600;            // so lange gedrückt = Details
+static const uint32_t DETAIL_WAIT_MS = 3000;    // ohne Antwort: "No details available"
+static const uint32_t DETAIL_CLOSE_MS = 30000;  // Detailblatt schließt sich selbst
+static const uint32_t UPDATE_CONFIRM_MS = 5000; // zweiter Tipp auf das Update-Banner binnen
 
 static char line[1024];
 static size_t lineLen = 0;
@@ -33,8 +65,18 @@ static bool locked = false;  // Windows-Sitzung gesperrt (bleibt auch offline er
 
 static uint8_t page = 0;
 static uint32_t lastTapMs = 0;  // letzte Geste (für PAGE_TIMEOUT_MS)
-static uint32_t doneAt = 0;     // wann der Host "Session fertig" meldete
-static bool doneFlash = false;
+static uint32_t flashAt = 0;    // Blitz (Session fertig: 1x, Limit-Warnung: 2x)
+static uint8_t flashCount = 0;
+static uint32_t detailAt = 0;   // wann das Detailblatt aufging
+static char updateVer[16] = ""; // neuere Version auf GitHub (vom Host)
+static bool updating = false;
+static bool updConfirm = false;
+static uint32_t updConfirmAt = 0;
+
+static void startFlash(uint8_t count) {
+  flashAt = millis();
+  flashCount = count;
+}
 
 static int64_t nowEpoch() {
   return hostEpoch > 0 ? hostEpoch + (int64_t)((millis() - hostEpochMs) / 1000) : 0;
@@ -73,8 +115,25 @@ static void handleState(const JsonDocument &doc) {
     hostEpochMs = millis();
   }
   vm.tzMin = constrain((int)(doc["tz"] | 0), -840, 840);
+  const float prevS = vm.session.pct, prevW = vm.week.pct;
+  // Letzter bekannter Reset-Zeitpunkt (nach Ablauf eines Fensters liefert der Host kurz 0).
+  static int64_t lastRS = 0, lastRW = 0;
+  if (vm.session.reset > 0) lastRS = vm.session.reset;
+  if (vm.week.reset > 0) lastRW = vm.week.reset;
+  const int64_t prevRS = lastRS, prevRW = lastRW;
   readWindow(doc["s"], vm.session);
   readWindow(doc["w"], vm.week);
+  // Limit-Warnung: beim Überschreiten von WARN_PCT zweimal blitzen.
+  if ((prevS >= 0 && prevS < WARN_PCT && vm.session.pct >= WARN_PCT) ||
+      (prevW >= 0 && prevW < WARN_PCT && vm.week.pct >= WARN_PCT)) {
+    startFlash(2);
+  }
+  // Neues Fenster: der Reset-Zeitpunkt springt nach vorn (Session um 5 h, Woche um 7 Tage).
+  if (prevRS > 0 && vm.session.reset - prevRS >= 3600) vm.session.newAt = millis() | 1;
+  if (prevRW > 0 && vm.week.reset - prevRW >= 86400) vm.week.newAt = millis() | 1;
+  // Update: u = neuere Version auf GitHub, ux = 1 während der Host aktualisiert.
+  copyAscii(updateVer, doc["u"] | "", sizeof updateVer);
+  updating = (doc["ux"] | 0) == 1;
   vm.fetchedAt = doc["at"] | (int64_t)0;
   copyAscii(err, doc["err"] | "", sizeof err);
   locked = doc["lock"].as<bool>();
@@ -100,8 +159,8 @@ static void handleState(const JsonDocument &doc) {
 
   haveData = true;
   lastRxMs = millis();
-  Serial.printf("{\"t\":\"ack\",\"s\":%.1f,\"w\":%.1f,\"b\":%u}\n", vm.session.pct, vm.week.pct,
-                targetBrightness());
+  Serial.printf("{\"t\":\"ack\",\"s\":%.1f,\"w\":%.1f,\"b\":%u,\"fw\":\"%s\",\"pn\":\"%s\"}\n",
+                vm.session.pct, vm.week.pct, targetBrightness(), FW_VERSION, PANEL_NAME);
 }
 
 
@@ -126,6 +185,22 @@ static void handleList(const JsonDocument &doc) {
   }
 }
 
+// Antwort auf eine Detail-Anfrage: r = [[Schlüssel, Wert], ...]. Nur solange das Blatt offen ist.
+static void handleDetail(const JsonDocument &doc) {
+  DetailView &d = vm.detail;
+  if (!d.show) return;
+  d.have = true;
+  const char st = (doc["s"] | "")[0];
+  if (st && strchr("waio", st)) d.st = st;
+  d.n = 0;
+  for (JsonVariantConst row : doc["r"].as<JsonArrayConst>()) {
+    if (d.n >= DETAIL_MAX) break;
+    copyAscii(d.key[d.n], row[0] | "", sizeof d.key[0]);
+    copyAscii(d.val[d.n], row[1] | "", sizeof d.val[0]);
+    d.n++;
+  }
+}
+
 static void handleLine(const char *s) {
   JsonDocument doc;
   if (deserializeJson(doc, s)) return;
@@ -135,8 +210,9 @@ static void handleLine(const char *s) {
   } else if (!strcmp(t, "list")) {
     handleList(doc);
   } else if (!strcmp(t, "done")) {  // eine Session ist fertig: kurz blitzen
-    doneAt = millis();
-    doneFlash = true;
+    startFlash(1);
+  } else if (!strcmp(t, "detail")) {
+    handleDetail(doc);
 #ifdef SCREENSHOT
   } else if (!strcmp(t, "shot")) {
     uiScreenshot();
@@ -181,15 +257,51 @@ static void sendOpen(int hit, const char *name, int x, int y) {
   Serial.print('\n');
 }
 
-// Gesten, ausgewertet beim Loslassen: waagrecht wischen = Seite wechseln (nach links die
-// nächste, nach rechts die vorige); tippen (kaum Bewegung) auf eine Session = am PC öffnen,
-// sonst nächste Seite; anders gewischt = nichts. Losgelassen ist erst nach RELEASE_MS ohne
-// Kontakt, gerechnet ab der ersten Abfrage ohne Kontakt (der Touch meldet beim Drücken
-// einzelne Aussetzer; ein langer Redraw dazwischen zählt nicht als Loslassen).
+// Details zu einer Session anfordern (p, i, n wie bei open).
+static void sendDetail(int hit, const char *name) {
+  JsonDocument d;
+  d["t"] = "detail";
+  d["p"] = page;
+  d["i"] = hit;
+  d["n"] = name;
+  serializeJson(d, Serial);
+  Serial.print('\n');
+}
+
+// Langer Druck auf eine Session (auch ohne Link, z. B. Terminal): Detailblatt öffnen und die
+// Details beim Host anfordern; bis zur Antwort steht "Loading..." da.
+static void longPress(int x, int y) {
+  if (targetBrightness() == 0) return;
+  if (vm.detail.show) {  // langer Druck auf das offene Blatt schließt es
+    vm.detail.show = false;
+    return;
+  }
+  lastTapMs = millis();
+  vm.page = page;
+  const int hit = uiHit(vm, x, y, false);
+  if (hit == HIT_NONE || hit == HIT_UPDATE) return;
+  const bool isLine = hit == HIT_SESSION;
+  const char *name = isLine ? vm.sess.name : vm.list[page - 1].item[hit].name;
+  DetailView &d = vm.detail;
+  d = DetailView();
+  d.show = true;
+  strlcpy(d.title, name, sizeof d.title);
+  d.st = isLine ? vm.sess.st : vm.list[page - 1].item[hit].st;
+  detailAt = millis();
+  sendDetail(hit, name);
+}
+
+// Gesten: langer Druck (LONG_MS, kaum bewegt) = Details, sofort beim Erreichen. Sonst beim
+// Loslassen: waagrecht wischen = Seite wechseln (nach links die nächste, nach rechts die
+// vorige); tippen (kaum Bewegung) auf eine Session = am PC öffnen, auf das Update-Banner =
+// Update (zweiter Tipp bestätigt), sonst nächste Seite; anders gewischt = nichts. Ein offenes
+// Detailblatt schließt jede Geste. Losgelassen ist erst nach RELEASE_MS ohne Kontakt,
+// gerechnet ab der ersten Abfrage ohne Kontakt (der Touch meldet beim Drücken einzelne
+// Aussetzer; ein langer Redraw dazwischen zählt nicht als Loslassen).
 // Bei ausgeschaltetem Display ignorieren.
 static void pollTouch() {
-  static uint32_t lastPoll = 0, upAt = 0;
-  static bool down = false, up = false;
+  static uint32_t lastPoll = 0, upAt = 0, downAt = 0;
+  static bool down = false, up = false, longDone = false;
   static int x0 = 0, y0 = 0, x1 = 0, y1 = 0;  // Start- und letzte Position
   if (millis() - lastPoll < 20) return;
   lastPoll = millis();
@@ -198,11 +310,18 @@ static void pollTouch() {
     if (!down) {
       x0 = x;
       y0 = y;
+      downAt = millis();
+      longDone = false;
     }
     x1 = x;
     y1 = y;
     down = true;
     up = false;
+    if (!longDone && millis() - downAt >= LONG_MS && abs(x1 - x0) < SWIPE_PX / 2 &&
+        abs(y1 - y0) < SWIPE_PX / 2) {
+      longDone = true;
+      longPress(x0, y0);
+    }
     return;
   }
   if (!down) return;
@@ -212,8 +331,12 @@ static void pollTouch() {
   }
   if (millis() - upAt < RELEASE_MS) return;
   down = up = false;
-  if (targetBrightness() == 0) return;
+  if (longDone || targetBrightness() == 0) return;
   lastTapMs = millis();
+  if (vm.detail.show) {
+    vm.detail.show = false;
+    return;
+  }
   const int dx = x1 - x0, dy = y1 - y0;
   if (abs(dx) >= SWIPE_PX && abs(dx) > 2 * abs(dy)) {
     page = (page + (dx < 0 ? 1 : 2)) % 3;
@@ -224,6 +347,17 @@ static void pollTouch() {
   const int hit = uiHit(vm, x0, y0);
   if (hit == HIT_NONE) {
     page = (page + 1) % 3;
+    return;
+  }
+  if (hit == HIT_UPDATE) {
+    if (updConfirm && millis() - updConfirmAt < UPDATE_CONFIRM_MS) {
+      Serial.print("{\"t\":\"update\"}\n");
+      updConfirm = false;
+    } else {
+      updConfirm = true;
+      updConfirmAt = millis();
+    }
+    uiFlash(hit);
     return;
   }
   sendOpen(hit, hit == HIT_SESSION ? vm.sess.name : vm.list[page - 1].item[hit].name, x0, y0);
@@ -251,15 +385,19 @@ void setup() {
   Serial.setRxBufferSize(2048);
   Serial.begin(115200);
   uiBegin(FW_VERSION);
-  Serial.printf("{\"t\":\"hello\",\"fw\":\"%s\"}\n", FW_VERSION);
+  Serial.printf("{\"t\":\"hello\",\"fw\":\"%s\",\"pn\":\"%s\"}\n", FW_VERSION, PANEL_NAME);
 }
 
 void loop() {
   pollSerial();
   pollTouch();
   updateBrightness();
-  if (doneFlash && millis() - doneAt >= DONE_FLASH_MS) doneFlash = false;
-  uiInvert(doneFlash && targetBrightness() > 0);
+  const uint32_t ft = millis() - flashAt;
+  if (flashCount && ft >= flashCount * FLASH_PERIOD_MS) flashCount = 0;
+  uiInvert(flashCount && ft % FLASH_PERIOD_MS < DONE_FLASH_MS && targetBrightness() > 0);
+  if (updConfirm && millis() - updConfirmAt >= UPDATE_CONFIRM_MS) updConfirm = false;
+  if (vm.detail.show && !vm.detail.have && millis() - detailAt >= DETAIL_WAIT_MS) vm.detail.have = true;
+  if (vm.detail.show && millis() - detailAt >= DETAIL_CLOSE_MS) vm.detail.show = false;
 
   static uint32_t lastFrame = 0;
   if (millis() - lastFrame < FRAME_MS) return;
@@ -270,6 +408,9 @@ void loop() {
   vm.now = nowEpoch();
   vm.err = err;
   vm.dots = dots;
+  vm.update = updateVer;
+  vm.updating = updating;
+  vm.updateConfirm = updConfirm;
   if (!haveData) {
     vm.screen = Screen::Waiting;
   } else if (millis() - lastRxMs > OFFLINE_AFTER_MS) {

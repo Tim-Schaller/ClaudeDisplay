@@ -10,7 +10,10 @@ struct Window {
   int64_t reset = 0;      // Reset-Zeitpunkt als Unix-Sekunden, 0 = unbekannt
   int64_t forecast = -1;  // 100 % erreicht um (Unix-s), 0 = reicht bis Reset, < 0 = unbekannt
   int expect = -1;        // hochgerechneter Stand beim Reset in % (nur bei forecast 0), < 0 = unbekannt
+  uint32_t newAt = 0;     // millis() beim Beginn eines neuen Fensters (Hinweis), 0 = keiner
 };
+
+static const float WARN_PCT = 90;  // Limit-Warnung ab hier (pulsierender Ring, Blitz beim Überschreiten)
 
 // Session-Zeile auf Seite 0: die wartende (Vorrang) bzw. arbeitende Session.
 struct SessionLine {
@@ -38,6 +41,18 @@ struct SessionList {
   ListItem item[LIST_MAX];
 };
 
+// Detailblatt (langer Druck auf eine Session): Schlüssel/Wert-Zeilen vom Host.
+static const int DETAIL_MAX = 7;
+struct DetailView {
+  bool show = false;  // sichtbar
+  bool have = false;  // Antwort des Hosts da (sonst "Loading...")
+  char title[41] = "";
+  char st = 0;        // w/a/i/o, 0 = ohne Dot
+  uint8_t n = 0;
+  char key[DETAIL_MAX][10] = {};
+  char val[DETAIL_MAX][41] = {};
+};
+
 enum class Screen { Waiting, Usage, Offline };  // Usage = Daten aktuell (alle Seiten)
 
 struct ViewModel {
@@ -52,6 +67,10 @@ struct ViewModel {
   uint32_t offlineSecs = 0;
   SessionLine sess;     // Session-Zeile auf Seite 0
   SessionList list[2];  // Seite 1 (Lokal), Seite 2 (Remote)
+  DetailView detail;    // über allem, solange show
+  const char *update = "";     // neuere Version auf GitHub, leer = keine
+  bool updating = false;       // Host aktualisiert gerade
+  bool updateConfirm = false;  // erster Tipp auf das Update-Banner, wartet auf den zweiten
 };
 
 void uiBegin(const char *fwVersion);
@@ -61,8 +80,10 @@ bool uiTouch(int *x, int *y);  // berührt? dann mit Bildschirmkoordinaten
 
 // Was liegt unter (x, y) auf der zuletzt gezeichneten Seite: eine Listenzeile (0..LIST_MAX-1),
 // die Session-Zeile (HIT_SESSION) oder nichts zum Öffnen (HIT_NONE).
-static const int HIT_NONE = -2, HIT_SESSION = -1;
-int uiHit(const ViewModel &vm, int x, int y);
+// HIT_UPDATE: das Update-Banner in der Fußzeile von Seite 0.
+// needOpen = false: auch Einträge ohne Link (für Details per langem Druck).
+static const int HIT_NONE = -2, HIT_SESSION = -1, HIT_UPDATE = -3;
+int uiHit(const ViewModel &vm, int x, int y, bool needOpen = true);
 void uiFlash(int hit);  // getroffene Zeile kurz hervorheben
 void uiInvert(bool on);  // ganzen Bildschirm invertieren (Hinweis "Session fertig")
 #ifdef SCREENSHOT

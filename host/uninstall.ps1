@@ -15,28 +15,28 @@ $DataDir = Join-Path $env:USERPROFILE '.usage-display'
 if (Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue) {
   Stop-ScheduledTask -TaskName $TaskName
   Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false
-  Write-Host "Task '$TaskName' entfernt"
+  Write-Host "Task '$TaskName' removed"
 }
 
 Get-CimInstance Win32_Process -Filter "Name = 'pwsh.exe'" |
   Where-Object { $_.CommandLine -like '*\.usage-display\collector.ps1*' } |
-  ForEach-Object { Stop-Process -Id $_.ProcessId -Force; Write-Host "Collector beendet (PID $($_.ProcessId))" }
+  ForEach-Object { Stop-Process -Id $_.ProcessId -Force; Write-Host "Collector stopped (PID $($_.ProcessId))" }
 Start-Sleep -Milliseconds 500
 
 if (Test-Path $DataDir) {
   Remove-Item $DataDir -Recurse -Force
-  Write-Host "$DataDir geloescht"
+  Write-Host "$DataDir deleted"
 }
 
 if ($Logout) {
   . (Join-Path $PSScriptRoot 'claude-cli.ps1')
   $exe = Find-ClaudeExe
-  if ($exe) { & $exe auth logout; Write-Host 'Claude-CLI abgemeldet' }
+  if ($exe) { & $exe auth logout; Write-Host 'Claude CLI signed out' }
 }
 
 if ($RemovePlatformIO) {
   $pio = Join-Path $env:USERPROFILE '.platformio'
-  if (Test-Path $pio) { Remove-Item $pio -Recurse -Force; Write-Host "$pio geloescht" }
+  if (Test-Path $pio) { Remove-Item $pio -Recurse -Force; Write-Host "$pio deleted" }
 }
 
-Write-Host 'Fertig.'
+Write-Host 'Done.'

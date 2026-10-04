@@ -1,7 +1,7 @@
 #Requires -Version 7.5
 <#
   Installiert den Collector für den aktuellen Benutzer (keine Admin-Rechte nötig):
-  - kopiert collector.ps1 nach %USERPROFILE%\.usage-display\
+  - kopiert collector.ps1, claude-cli.ps1 und update.ps1 nach %USERPROFILE%\.usage-display\
   - legt den Task "Claude Usage Display" an (Start bei Anmeldung, unsichtbar)
     und startet ihn
   - meldet die Claude-CLI an, falls nötig (Browser-Login, einmalig)
@@ -21,11 +21,12 @@ $Collector = Join-Path $DataDir 'collector.ps1'
 $ConfigFile = Join-Path $DataDir 'config.json'
 
 $Port = $Port.Trim().ToUpperInvariant()
-if ($Port -and $Port -notmatch '^COM\d+$') { throw "Ungueltiger Port '$Port' (z. B. COM7, leer = automatisch)" }
+if ($Port -and $Port -notmatch '^COM\d+$') { throw "Invalid port '$Port' (e.g. COM7, empty = automatic)" }
 
 New-Item -ItemType Directory -Force -Path $DataDir | Out-Null
-Copy-Item (Join-Path $PSScriptRoot 'collector.ps1'), (Join-Path $PSScriptRoot 'claude-cli.ps1') $DataDir -Force
-Write-Host "Collector kopiert nach $Collector"
+Copy-Item (Join-Path $PSScriptRoot 'collector.ps1'), (Join-Path $PSScriptRoot 'claude-cli.ps1'),
+  (Join-Path $PSScriptRoot 'update.ps1') $DataDir -Force
+Write-Host "Collector copied to $Collector"
 
 if ($PSBoundParameters.ContainsKey('RemoteLabel') -or $PSBoundParameters.ContainsKey('LocalLabel') -or
   $PSBoundParameters.ContainsKey('Port')) {
@@ -40,11 +41,11 @@ if ($PSBoundParameters.ContainsKey('RemoteLabel') -or $PSBoundParameters.Contain
   if ($PSBoundParameters.ContainsKey('LocalLabel')) { $cfg.localLabel = $LocalLabel }
   if ($PSBoundParameters.ContainsKey('Port')) { $cfg.port = $Port }
   foreach ($l in $cfg.remoteLabel, $cfg.localLabel) {
-    if ($l.Length -gt 14) { Write-Warning "Seitentitel '$l' hat mehr als 14 Zeichen und wird auf dem Display gekuerzt." }
+    if ($l.Length -gt 14) { Write-Warning "Page title '$l' is longer than 14 characters and will be shortened on the display." }
   }
   $cfg | ConvertTo-Json | Set-Content -Path $ConfigFile -Encoding utf8
-  $p = if ($cfg.port) { $cfg.port } else { 'automatisch' }
-  Write-Host "Einstellungen gespeichert: Lokal='$($cfg.localLabel)', Remote='$($cfg.remoteLabel)', Port: $p"
+  $p = if ($cfg.port) { $cfg.port } else { 'automatic' }
+  Write-Host "Settings saved: local='$($cfg.localLabel)', remote='$($cfg.remoteLabel)', port: $p"
 }
 . (Join-Path $PSScriptRoot 'claude-cli.ps1')
 
@@ -61,17 +62,17 @@ $principal = New-ScheduledTaskPrincipal -UserId $user -LogonType Interactive -Ru
 $settings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit ([TimeSpan]::Zero) -MultipleInstances IgnoreNew `
   -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
 Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger -Principal $principal `
-  -Settings $settings -Description 'Sendet den Claude-Usage-Stand an das USB-Display.' -Force | Out-Null
-Write-Host "Task '$TaskName' angelegt (Start bei Anmeldung)"
+  -Settings $settings -Description 'Sends the Claude usage to the USB display.' -Force | Out-Null
+Write-Host "Task '$TaskName' registered (starts at logon)"
 
 if (-not $NoLogin) {
   $exe = Find-ClaudeExe
-  if (-not $exe) { throw 'Claude-CLI nicht gefunden (Claude Desktop installiert?)' }
+  if (-not $exe) { throw 'Claude CLI not found (is Claude Desktop installed?)' }
   $status = & $exe auth status | ConvertFrom-Json
   if ($status.loggedIn) {
-    Write-Host "Claude-CLI ist angemeldet ($($status.authMethod))"
+    Write-Host "Claude CLI is signed in ($($status.authMethod))"
   } else {
-    Write-Host 'Claude-CLI ist nicht angemeldet - Browser-Login startet ...'
+    Write-Host 'Claude CLI is not signed in - starting the browser login ...'
     & $exe auth login --claudeai
   }
 }
@@ -83,4 +84,4 @@ Get-CimInstance Win32_Process -Filter "Name = 'pwsh.exe'" |
   ForEach-Object { Stop-Process -Id $_.ProcessId -Force }
 Start-Sleep -Seconds 1
 Start-ScheduledTask -TaskName $TaskName
-Write-Host "Collector gestartet. Log: $(Join-Path $DataDir 'collector.log')"
+Write-Host "Collector started. Log: $(Join-Path $DataDir 'collector.log')"
