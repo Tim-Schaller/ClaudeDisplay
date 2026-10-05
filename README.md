@@ -327,9 +327,13 @@ working (so after about 30 s of work or more), and up to 30 s late.
   started.
 - **"Offline":** no message from the host for 90 s ("No data for …"). The last known
   values are shown at the bottom.
+- **Standby:** after 60 s without a message from the host (PC asleep, undocked, or the
+  collector not running) the backlight turns off. It comes back on by itself as soon as
+  the collector sends data again. A tap shows the screen ("Waiting for data" or "Offline")
+  for 30 s.
 - **`--`:** value unknown, e.g. before the first successful fetch.
 - **Update banner:** see [Updates](#updates).
-- **Brightness:** always 100 %; while Windows is locked the backlight is off. (The light
+- **Brightness:** always 100 %; while Windows is locked and in standby the backlight is off. (The light
   sensor is not used: inside a case it reads "dark" even in a normally lit room.)
 
 The screenshots are read straight from a real display (debug build with `-DSCREENSHOT`)
@@ -376,7 +380,8 @@ to GitHub.
 | Remote page: "List unavailable" | No network, or the internal interface has changed. The last list stays on screen |
 | Remote page stays empty | Remote Control is not enabled on the other machine, or it uses a different Claude account |
 | Update banner: "Updating..." disappears, old version still there | See `%USERPROFILE%\.usage-display\update.log`. Typical causes: no network, the port was busy, or flashing failed (then run `Setup.cmd` from the new release ZIP) |
-| Display stays dark although unlocked | "Locked" means `LogonUI.exe` is running. After unlocking, the next update arrives within 2 s |
+| Display stays dark although unlocked | "Locked" means `LogonUI.exe` is running. After unlocking, the next update arrives within 2 s. If the collector has not sent anything for 60 s, the display is in standby: tap it; "Waiting for data" means the collector has not found it yet (see above) |
+| After docking or waking the PC, the display takes a while | The collector can only reach the display once Windows is awake (after docking often only once you have signed in); it then connects within about 3 s, on a new USB port under a new COM number too. Until then the display goes dark after 60 s (standby) |
 
 The log is kept short: start, connect, disconnect, changed values, errors. Repeated
 identical errors are logged only once. At 1 MB it is rotated to `collector.log.1`.
@@ -443,7 +448,7 @@ finished; the display inverts for 250 ms. Not sent while Windows is locked.
 
 **Timing:** usage every 120 s (in the background), local sessions every 2 s (Claude Desktop
 session files every 4 s), remote list every 30 s, lock
-state every 2 s, heartbeat every 30 s, offline screen after 90 s without `state`, release check every 6 h.
+state every 2 s, heartbeat every 30 s, standby after 60 s and offline screen after 90 s without `state`, release check every 6 h.
 The board computes the countdowns itself from `r` and the clock set by the host.
 
 ## Uninstall

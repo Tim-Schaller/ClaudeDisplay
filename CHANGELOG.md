@@ -8,7 +8,13 @@ The version is the firmware version the display reports.
 
 ## [Unreleased]
 
+## [2.8.0] - 2026-10-05
+
 ### Added
+- **Standby.** After 60 s without data from the PC (asleep, undocked, collector not running)
+  the backlight turns off; it comes back on as soon as data arrives again. A tap wakes the
+  display for 30 s. Previously it kept showing "Waiting for data" or "Offline", e.g. while
+  the PC woke up after docking.
 - This changelog.
 
 ### Changed
@@ -66,6 +72,7 @@ First public release.
   sessions come from the Remote Control session list. **USB serial only — no Wi-Fi and no
   token on the device.**
 
-[Unreleased]: https://github.com/Tim-Schaller/ClaudeDisplay/compare/v2.7.0...HEAD
+[Unreleased]: https://github.com/Tim-Schaller/ClaudeDisplay/compare/v2.8.0...HEAD
+[2.8.0]: https://github.com/Tim-Schaller/ClaudeDisplay/releases/tag/v2.8.0
 [2.7.0]: https://github.com/Tim-Schaller/ClaudeDisplay/releases/tag/v2.7.0
 [2.6.0]: https://github.com/Tim-Schaller/ClaudeDisplay/releases/tag/v2.6.0

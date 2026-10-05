@@ -24,7 +24,7 @@
 
 // Version per Build-Flag überschreibbar (z. B. -DFW_VERSION_STR=\"2.6.9\" zum Testen des Updates).
 #ifndef FW_VERSION_STR
-#define FW_VERSION_STR "2.7.0"
+#define FW_VERSION_STR "2.8.0"
 #endif
 static const char *FW_VERSION = FW_VERSION_STR;
 // Für das Selbst-Update: welches Release-Image passt. Mit eigenen Panel-Flags gebaut ("custom")
@@ -37,6 +37,8 @@ static const char *PANEL_NAME = "ili9341";
 static const char *PANEL_NAME = "st7789";
 #endif
 static const uint32_t OFFLINE_AFTER_MS = 90000;
+static const uint32_t STANDBY_MS = 60000;       // so lange kein state: Standby (Backlight aus)
+static const uint32_t WAKE_MS = 30000;          // Tippen im Standby: so lange an
 static const uint32_t FRAME_MS = 40;            // Bildaufbau (Dot-Animation braucht < 300 ms)
 static const uint32_t RELEASE_MS = 100;         // so lange ohne Kontakt = losgelassen
 static const int SWIPE_PX = 50;                 // waagrechter Weg für einen Wisch
@@ -61,7 +63,8 @@ static uint32_t lastRxMs = 0;
 static int64_t hostEpoch = 0;  // zuletzt empfangene Host-Uhrzeit ...
 static uint32_t hostEpochMs = 0;  // ... und wann sie ankam
 
-static bool locked = false;  // Windows-Sitzung gesperrt (bleibt auch offline erhalten)
+static bool locked = false;  // Windows-Sitzung gesperrt
+static uint32_t wakeAt = 0;  // letzte Geste im Standby
 
 static uint8_t page = 0;
 static uint32_t lastTapMs = 0;  // letzte Geste (für PAGE_TIMEOUT_MS)
@@ -82,7 +85,15 @@ static int64_t nowEpoch() {
   return hostEpoch > 0 ? hostEpoch + (int64_t)((millis() - hostEpochMs) / 1000) : 0;
 }
 
+// Standby: STANDBY_MS lang kein state (PC schläft, ist abgedockt oder der Collector läuft
+// nicht) -> Backlight aus, bis wieder state kommt. Die Sperre zählt dann nicht mehr (sie ist
+// veraltet). Ein Tipp weckt das Display für WAKE_MS.
+static bool hostGone() {
+  return millis() - lastRxMs > STANDBY_MS;
+}
+
 static uint8_t targetBrightness() {
+  if (hostGone()) return millis() - wakeAt < WAKE_MS ? 255 : 0;
   return locked ? 0 : 255;
 }
 
@@ -298,7 +309,7 @@ static void longPress(int x, int y) {
 // Detailblatt schließt jede Geste. Losgelassen ist erst nach RELEASE_MS ohne Kontakt,
 // gerechnet ab der ersten Abfrage ohne Kontakt (der Touch meldet beim Drücken einzelne
 // Aussetzer; ein langer Redraw dazwischen zählt nicht als Loslassen).
-// Bei ausgeschaltetem Display ignorieren.
+// Bei ausgeschaltetem Display ignorieren; im Standby weckt ein Tipp.
 static void pollTouch() {
   static uint32_t lastPoll = 0, upAt = 0, downAt = 0;
   static bool down = false, up = false, longDone = false;
@@ -331,7 +342,10 @@ static void pollTouch() {
   }
   if (millis() - upAt < RELEASE_MS) return;
   down = up = false;
-  if (longDone || targetBrightness() == 0) return;
+  // Im Standby weckt die erste Geste nur; jede weitere hält das Display WAKE_MS länger an.
+  const bool dark = targetBrightness() == 0;
+  if (hostGone()) wakeAt = millis();
+  if (longDone || dark) return;
   lastTapMs = millis();
   if (vm.detail.show) {
     vm.detail.show = false;
@@ -364,7 +378,7 @@ static void pollTouch() {
   uiFlash(hit);
 }
 
-// Backlight voll an, bei gesperrter Windows-Sitzung aus; Übergänge weich (ca. 1 s).
+// Backlight voll an, bei gesperrter Windows-Sitzung und im Standby aus; Übergänge weich (ca. 1 s).
 // (Der Lichtsensor ist zu unzuverlässig: in einem Gehäuse misst er schon bei normalem
 // Raumlicht "dunkel".)
 static void updateBrightness() {
